@@ -1172,7 +1172,9 @@ class SmartCoinFinder:
                     continue
 
                 if local_side != global_side:
-                    logger.info(f"⏭️ {symbol} có local side {local_side} khác global {global_side}, bỏ qua")
+                    if self._bot_manager:
+                        self._bot_manager.bot_coordinator.add_temp_blacklist(symbol, duration=60)  # <<<< ĐÃ THÊM BLACKLIST
+                    logger.info(f"⏭️ {symbol} có local side {local_side} khác global {global_side}, blacklist 60s")
                     continue
 
                 logger.info(f"✅ Tìm thấy coin {symbol} phù hợp ({global_side}) | volume: {coin['volume']:.2f}")
@@ -1570,11 +1572,17 @@ class BaseBot:
                         })
                         self.log(f"📌 Phát hiện vị thế {symbol} từ API")
                 else:
+                    # Vị thế đã đóng (positionAmt = 0) nhưng bot tưởng đang mở
                     if self.symbol_data[symbol]['position_open']:
-                        self._reset_symbol_position(symbol)
-            else:
-                if self.symbol_data[symbol]['position_open']:
+                        self.log(f"🔔 Phát hiện {symbol} vị thế đã đóng (có thể do người dùng đóng) - blacklist 5 phút")
+                        self.bot_coordinator.add_temp_blacklist(symbol, duration=300)  # <<<< ĐÃ THÊM
                     self._reset_symbol_position(symbol)
+            else:
+                # Không có vị thế nào trả về
+                if self.symbol_data[symbol]['position_open']:
+                    self.log(f"🔔 Không còn vị thế {symbol} - blacklist 5 phút")
+                    self.bot_coordinator.add_temp_blacklist(symbol, duration=300)  # <<<< ĐÃ THÊM
+                self._reset_symbol_position(symbol)
         except Exception as e:
             logger.error(f"Lỗi kiểm tra vị thế {symbol}: {str(e)}")
 
