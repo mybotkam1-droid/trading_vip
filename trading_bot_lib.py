@@ -1,8 +1,8 @@
-# trading_bot_final_fix.py
+# trading_bot_volume_spike.py
 # =============================================================================
-#  HOÀN CHỈNH - TOÀN BỘ SỬA LỖI + SMART EXIT THEO TÍN HIỆU NẾN ĐẢO CHIỀU
-#  - Cache mark price 1s, retry check vị thế, reset sau pyramiding
-#  - TP cứng ưu tiên trước, Smart exit: đạt ROI → nến đảo chiều → đóng
+#  HOÀN CHỈNH - TÍN HIỆU VOLUME SPIKE CONTRARIAN
+#  - Vào lệnh: volume spike (gấp volume_ratio lần) → vào ngược chiều giá
+#  - Thoát lệnh: ROI trigger + volume spike ngược (cùng lúc) hoặc volume exit đơn thuần
 # =============================================================================
 
 import json
@@ -381,12 +381,13 @@ def create_min_volume_sell_keyboard():
         "one_time_keyboard": True
     }
 
-def create_candle_ratio_keyboard():
+# Keyboard cho tỉ lệ volume (thay thế candle ratio)
+def create_volume_ratio_keyboard():
     return {
         "keyboard": [
-            [{"text": "1.2"}, {"text": "1.5"}, {"text": "2.0"}],
-            [{"text": "2.5"}, {"text": "3.0"}],
-            [{"text": "❌ Bỏ qua (mặc định 1.5)"}],
+            [{"text": "1.5"}, {"text": "2.0"}, {"text": "2.5"}],
+            [{"text": "3.0"}, {"text": "4.0"}],
+            [{"text": "❌ Bỏ qua (mặc định 2.0)"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
         "resize_keyboard": True,
@@ -875,11 +876,12 @@ def get_mark_price(symbol):
     _mark_price_time[symbol] = now
     return price
 
-# ========== HÀM PHÂN TÍCH NẾN (DÙNG CHO CẢ VÀO LỆNH VÀ SMART EXIT) ==========
-def get_local_side_from_candles(symbol, ratio=1.5):
+# ========== HÀM PHÂN TÍCH VOLUME SPIKE (CONTRARIAN) ==========
+def get_side_from_volume_spike(symbol, ratio=2.0):
     """
-    Trả về 'BUY' nếu nến hiện tại tăng mạnh so với nến trước,
-    'SELL' nếu giảm mạnh, None nếu không rõ ràng.
+    Trả về 'BUY' nếu volume spike và giá giảm (contrarian mua),
+    'SELL' nếu volume spike và giá tăng (contrarian bán),
+    None nếu không đủ spike.
     """
     try:
         url = "https://fapi.binance.com/fapi/v1/klines"
@@ -889,19 +891,18 @@ def get_local_side_from_candles(symbol, ratio=1.5):
             return None
         prev = data[0]
         curr = data[1]
-        open_prev = float(prev[1])
-        close_prev = float(prev[4])
+        vol_prev = float(prev[5])
+        vol_curr = float(curr[5])
         open_curr = float(curr[1])
         close_curr = float(curr[4])
-        len_prev = abs(close_prev - open_prev)
-        len_curr = abs(close_curr - open_curr)
-        if len_prev == 0:
+        if vol_prev == 0:
             return None
-        if len_curr / len_prev > ratio:
-            return "BUY" if close_curr > open_curr else "SELL"
+        if vol_curr / vol_prev > ratio:
+            # Volume spike: vào contrarian
+            return "SELL" if close_curr > open_curr else "BUY"
         return None
     except Exception as e:
-        logger.error(f"Lỗi phân tích nến {symbol}: {e}")
+        logger.error(f"Lỗi phân tích volume {symbol}: {e}")
         return None
 
 # ========== HÀM KIỂM TRA VỊ THẾ ==========
@@ -1071,7 +1072,7 @@ class SmartCoinFinder:
         self.last_position_count_update = 0
         self._bot_manager = None
         self.bot_leverage = 10
-        self.candle_ratio = 1.5
+        self.volume_ratio = 2.0   # thay vì candle_ratio
 
     def set_bot_manager(self, bot_manager):
         self._bot_manager = bot_manager
@@ -1111,7 +1112,8 @@ class SmartCoinFinder:
                 if self._bot_manager and self._bot_manager.coin_manager.is_coin_active(symbol):
                     continue
 
-                local_side = get_local_side_from_candles(symbol, self.candle_ratio)
+                # Kiểm tra tín hiệu volume spike contrarian
+                local_side = get_side_from_volume_spike(symbol, self.volume_ratio)
                 if local_side is None or local_side != global_side:
                     continue
 
@@ -1207,12 +1209,12 @@ class WebSocketManager:
             self.remove_symbol(symbol)
         self.executor.shutdown(wait=False)
 
-# ========== LỚP BaseBot (CỐT LÕI, ĐÃ SỬA TOÀN BỘ) ==========
+# ========== LỚP BaseBot (CỐT LÕI, ĐÃ SỬA THEO VOLUME SPIKE) ==========
 class BaseBot:
     def __init__(self, symbol, lev, percent, tp, sl, roi_trigger, ws_manager, api_key, api_secret,
                  telegram_bot_token, telegram_chat_id, strategy_name, config_key=None, bot_id=None,
                  coin_manager=None, symbol_locks=None, max_coins=1, bot_coordinator=None,
-                 pyramiding_n=0, pyramiding_x=0, candle_ratio=1.5, **kwargs):
+                 pyramiding_n=0, pyramiding_x=0, volume_ratio=2.0, volume_exit_enabled=True, **kwargs):
 
         self.max_coins = 1
         self.active_symbols = []
@@ -1236,7 +1238,8 @@ class BaseBot:
         self.pyramiding_n = int(pyramiding_n) if pyramiding_n else 0
         self.pyramiding_x = float(pyramiding_x) if pyramiding_x else 0
         self.pyramiding_enabled = self.pyramiding_n > 0 and self.pyramiding_x > 0
-        self.candle_ratio = float(candle_ratio) if candle_ratio else 1.5
+        self.volume_ratio = float(volume_ratio) if volume_ratio else 2.0
+        self.volume_exit_enabled = volume_exit_enabled   # có thể tắt nếu muốn
 
         self.status = "searching" if not symbol else "waiting"
         self._stop = False
@@ -1265,7 +1268,7 @@ class BaseBot:
         self.symbol_locks = symbol_locks or defaultdict(threading.RLock)
         self.coin_finder = SmartCoinFinder(api_key, api_secret)
         self.coin_finder.bot_leverage = self.lev
-        self.coin_finder.candle_ratio = self.candle_ratio
+        self.coin_finder.volume_ratio = self.volume_ratio
 
         self.find_new_bot_after_close = True
         self.bot_creation_time = time.time()
@@ -1302,8 +1305,8 @@ class BaseBot:
 
         roi_info = f" | 🎯 ROI Kích hoạt: {roi_trigger}%" if roi_trigger else " | 🎯 ROI Kích hoạt: Tắt"
         pyramiding_info = f" | 🔄 Nhồi lệnh: {pyramiding_n} lần tại {pyramiding_x}%" if self.pyramiding_enabled else " | 🔄 Nhồi lệnh: Tắt"
-        candle_info = f" | 🕯️ Tỉ lệ nến: {self.candle_ratio}"
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | TP/SL: {self.tp}%/{self.sl}%{roi_info}{pyramiding_info}{candle_info}")
+        volume_info = f" | 📊 Tỉ lệ volume spike: {self.volume_ratio}x | Thoát volume: {'Bật' if self.volume_exit_enabled else 'Tắt'}"
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | TP/SL: {self.tp}%/{self.sl}%{roi_info}{pyramiding_info}{volume_info}")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1401,7 +1404,7 @@ class BaseBot:
             if symbol_info['position_open']:
                 # ƯU TIÊN TP/SL TRƯỚC
                 self._check_symbol_tp_sl(symbol)
-                # SAU ĐÓ MỚI ĐẾN SMART EXIT
+                # SAU ĐÓ MỚI ĐẾN SMART EXIT (volume spike ngược chiều + ROI)
                 if self._check_smart_exit_condition(symbol):
                     return False
                 if self.pyramiding_enabled:
@@ -1554,10 +1557,10 @@ class BaseBot:
                     self.stop_symbol(symbol, failed=True)
                     return False
 
-                # Kiểm tra lại tín hiệu nến ngay trước khi vào lệnh
-                local_check = get_local_side_from_candles(symbol, self.candle_ratio)
+                # Kiểm tra tín hiệu volume spike contrarian ngay trước khi vào lệnh
+                local_check = get_side_from_volume_spike(symbol, self.volume_ratio)
                 if local_check is None or local_check != side:
-                    self.log(f"⚠️ {symbol} tín hiệu nến không còn phù hợp ({local_check} vs {side})")
+                    self.log(f"⚠️ {symbol} tín hiệu volume spike không còn phù hợp ({local_check} vs {side})")
                     if hasattr(self, '_bot_manager') and self._bot_manager:
                         self._bot_manager.bot_coordinator.add_temp_blacklist(symbol, duration=60)
                     self.stop_symbol(symbol, failed=True)
@@ -1792,7 +1795,7 @@ class BaseBot:
                 self._blacklist_and_stop_symbol(symbol, reason="SL")
             return
 
-    # ---------- PYRAMIDING (có reset khi thành công) ----------
+    # ---------- PYRAMIDING ----------
     def _check_pyramiding(self, symbol):
         if not self.pyramiding_enabled:
             return
@@ -1803,7 +1806,6 @@ class BaseBot:
             return
         if data['pyramiding_count'] >= self.pyramiding_n:
             return
-        # Chỉ nhồi lệnh BUY? Giữ nguyên logic cũ
         if data['side'] != 'BUY':
             return
 
@@ -1920,7 +1922,6 @@ class BaseBot:
                     'qty': new_qty,
                     'entry': new_entry,
                     'entry_base': new_entry,
-                    # RESET các biến smart exit để tính lại cho entry mới
                     'high_water_mark_roi': 0.0,
                     'roi_check_activated': False,
                 })
@@ -1934,10 +1935,8 @@ class BaseBot:
             self.log(f"❌ Lỗi nhồi lệnh {symbol}: {str(e)}")
             return False
 
-    # ========== SMART EXIT MỚI: ĐẠT ROI → TÍN HIỆU NẾN ĐẢO CHIỀU → ĐÓNG ==========
+    # ========== SMART EXIT MỚI: ROI trigger AND volume spike ngược chiều (cùng lúc) ==========
     def _check_smart_exit_condition(self, symbol):
-        if not self.roi_trigger:
-            return False
         if symbol not in self.symbol_data:
             return False
         data = self.symbol_data[symbol]
@@ -1967,21 +1966,27 @@ class BaseBot:
         else:
             roi = (entry - current_price) / entry * 100 * self.lev
 
-        # Kích hoạt khi ROI đạt ngưỡng
-        if roi >= self.roi_trigger and not data['roi_check_activated']:
-            data['roi_check_activated'] = True
-            self.log(f"🎯 ROI đạt {roi:.2f}% - Kích hoạt chốt lời sớm, chờ tín hiệu đảo chiều")
+        # Kiểm tra volume spike ngược chiều hiện tại
+        spike_side = get_side_from_volume_spike(symbol, self.volume_ratio)
 
-        # Khi đã kích hoạt, kiểm tra tín hiệu nến đảo chiều
-        if data['roi_check_activated']:
-            local_side = get_local_side_from_candles(symbol, self.candle_ratio)
-            if local_side is not None and local_side != data['side']:
-                self.log(f"🔄 {symbol} tín hiệu nến đảo chiều ({local_side} ≠ {data['side']}), đóng ngay (ROI={roi:.2f}%)")
-                if self._close_symbol_position(symbol, reason=f"(Smart exit: nến đảo chiều, ROI={roi:.2f}%)"):
-                    self._blacklist_and_stop_symbol(symbol, reason="Smart exit (đảo chiều)")
-                return True
+        # Nếu có volume spike ngược chiều
+        if spike_side is not None and spike_side != data['side']:
+            if self.roi_trigger is not None:
+                # Nếu cài ROI trigger: chỉ đóng khi đạt ROI AND có volume spike ngược
+                if roi >= self.roi_trigger:
+                    self.log(f"🔄 {symbol} ROI {roi:.2f}% + volume spike ngược, đóng ngay")
+                    if self._close_symbol_position(symbol, reason=f"(Smart exit: ROI {roi:.2f}% + volume spike)"):
+                        self._blacklist_and_stop_symbol(symbol, reason="Smart exit (ROI+spike)")
+                    return True
+            else:
+                # Không có ROI trigger: nếu bật volume_exit_enabled thì đóng ngay khi có spike ngược
+                if self.volume_exit_enabled:
+                    self.log(f"🔄 {symbol} volume spike ngược, đóng ngay (ROI={roi:.2f}%)")
+                    if self._close_symbol_position(symbol, reason=f"(Smart exit: volume spike contrarian)"):
+                        self._blacklist_and_stop_symbol(symbol, reason="Smart exit (spike)")
+                    return True
 
-        # Cập nhật high_water_mark_roi (chỉ để theo dõi, không còn dùng để thoát lệnh)
+        # Cập nhật high_water_mark_roi (chỉ để theo dõi)
         if roi > data['high_water_mark_roi']:
             data['high_water_mark_roi'] = roi
 
@@ -2101,7 +2106,7 @@ class BaseBot:
 class GlobalMarketBot(BaseBot):
     pass
 
-# ========== BotManager (GIỮ NGUYÊN, KHÔNG THAY ĐỔI) ==========
+# ========== BotManager (GIỮ NGUYÊN, CẬP NHẬT THAM SỐ VOLUME RATIO) ==========
 class BotManager:
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
         self.ws_manager = WebSocketManager()
@@ -2122,7 +2127,7 @@ class BotManager:
 
         if api_key and api_secret:
             self._verify_api_connection()
-            self.log("🟢 HỆ THỐNG BOT CÂN BẰNG LỆNH (USDT/USDC) ĐÃ KHỞI ĐỘNG")
+            self.log("🟢 HỆ THỐNG BOT CÂN BẰNG LỆNH (USDT/USDC) - TÍN HIỆU VOLUME SPIKE CONTRARIAN")
             self._initialize_cache()
             self._cache_thread = threading.Thread(target=self._cache_updater, daemon=True, name='cache_updater')
             self._cache_thread.start()
@@ -2210,10 +2215,10 @@ class BotManager:
                     'sl': bot.sl,
                     'pyramiding': f"{bot.pyramiding_n}/{bot.pyramiding_x}%" if hasattr(bot, 'pyramiding_enabled') and bot.pyramiding_enabled else "Tắt",
                     'balance_orders': "BẬT" if hasattr(bot, 'enable_balance_orders') and bot.enable_balance_orders else "TẮT",
-                    'candle_ratio': bot.candle_ratio if hasattr(bot, 'candle_ratio') else 1.5
+                    'volume_ratio': bot.volume_ratio if hasattr(bot, 'volume_ratio') else 2.0
                 })
 
-            summary = "📊 **THỐNG KÊ CHI TIẾT - HỆ THỐNG CÂN BẰNG (USDT/USDC)**\n\n"
+            summary = "📊 **THỐNG KÊ CHI TIẾT - HỆ THỐNG VOLUME SPIKE CONTRARIAN (USDT/USDC)**\n\n"
 
             cache_stats = _COINS_CACHE.get_stats()
             coins_in_cache = cache_stats['count']
@@ -2257,9 +2262,9 @@ class BotManager:
                 for bot in bot_details:
                     status_emoji = "🟢" if bot['is_trading'] else "🟡" if bot['has_coin'] else "🔴"
                     balance_emoji = "⚖️" if bot['balance_orders'] == "BẬT" else ""
-                    candle_info = f"🕯️{bot['candle_ratio']}"
+                    volume_info = f"📊{bot['volume_ratio']}x"
                     tp_sl_str = f"TP:{bot['tp']}% SL:{bot['sl']}%"
-                    summary += f"{status_emoji} **bot_{bot['index']}** {balance_emoji} {candle_info} {tp_sl_str}\n"
+                    summary += f"{status_emoji} **bot_{bot['index']}** {balance_emoji} {volume_info} {tp_sl_str}\n"
                     summary += f"   💰 Đòn bẩy: {bot['leverage']}x | Vốn: {bot['percent']}% | Nhồi lệnh: {bot['pyramiding']} | Cân bằng: {bot['balance_orders']}\n"
                     if bot['symbols']:
                         for symbol in bot['symbols']:
@@ -2291,30 +2296,24 @@ class BotManager:
                              bot_token=self.telegram_bot_token,
                              default_chat_id=self.telegram_chat_id)
 
-    
     def send_main_menu(self, chat_id):
         welcome = (
-            "🤖 <b>BOT GIAO DỊCH FUTURES - CHIẾN LƯỢC CÂN BẰNG LỆNH (USDT/USDC)</b>\n\n"
+            "🤖 <b>BOT GIAO DỊCH FUTURES - VOLUME SPIKE CONTRARIAN (USDT/USDC)</b>\n\n"
             "🎯 <b>CƠ CHẾ HOẠT ĐỘNG:</b>\n"
-            "• Đếm số lượng lệnh BUY/SELL hiện có trên Binance\n"
-            "• Nhiều lệnh BUY hơn → tìm lệnh SELL\n"
-            "• Nhiều lệnh SELL hơn → tìm lệnh BUY\n"
-            "• Bằng nhau → chọn ngẫu nhiên\n\n"
-            "📊 <b>LỰA CHỌN COIN:</b>\n"
-            "• MUA: chọn coin có giá ≤ max_price_buy, volume ≤ max_volume_buy\n"
-            "• BÁN: chọn coin có giá ≥ min_price_sell, volume ≥ min_volume_sell\n"
-            "• SẮP XẾP theo khối lượng giao dịch GIẢM DẦN\n"
-            "• Loại trừ BTCUSDT, ETHUSDT, BTCUSDC, ETHUSDC\n\n"
+            "• Đếm số lượng lệnh BUY/SELL hiện có → chọn hướng cân bằng\n"
+            "• Tìm coin có volume spike (gấp volume_ratio lần) và vào lệnh NGƯỢC CHIỀU với giá\n"
+            "• MUA khi volume spike và giá giảm, BÁN khi volume spike và giá tăng\n\n"
+            "📊 <b>LỌC COIN:</b>\n"
+            "• MUA: giá ≤ max_price_buy, volume ≤ max_volume_buy\n"
+            "• BÁN: giá ≥ min_price_sell, volume ≥ min_volume_sell\n\n"
             "🔄 <b>NHỒI LỆNH (PYRAMIDING):</b>\n"
-            "• Nhồi lệnh cùng chiều khi đạt mốc ROI\n"
-            "• Số lần nhồi và mốc ROI tùy chỉnh\n"
-            "• Tự động cập nhật giá trung bình\n\n"
-            "🎯 <b>CHỐT LỜI SỚM:</b>\n"
-            "• Kích hoạt khi đạt ROI target\n"
-            "• Chốt lời ngay khi có tín hiệu xấu\n\n"
-            "🕯️ <b>TÍN HIỆU NẾN:</b>\n"
-            "• Tỉ lệ nến hiện tại/nến trước > ngưỡng → tín hiệu mạnh\n"
-            "• Chỉ vào lệnh khi tín hiệu nến cùng hướng cân bằng"
+            "• Nhồi cùng chiều khi đạt mốc ROI\n\n"
+            "🎯 <b>SMART EXIT:</b>\n"
+            "• Nếu cài ROI trigger: đóng lệnh khi ROI đạt ngưỡng VÀ có volume spike ngược chiều\n"
+            "• Nếu không cài ROI trigger: đóng ngay khi có volume spike ngược (nếu bật)\n\n"
+            "🕯️ <b>TÍN HIỆU VOLUME:</b>\n"
+            "• Tỉ lệ volume hiện tại / volume trước > volume_ratio → tín hiệu contrarian\n"
+            "• Mặc định volume_ratio = 2.0 (gấp đôi)"
         )
         send_telegram(welcome, chat_id=chat_id, reply_markup=create_main_menu(),
                      bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -2333,7 +2332,8 @@ class BotManager:
         bot_mode = kwargs.get('bot_mode', 'static')
         pyramiding_n = kwargs.get('pyramiding_n', 0)
         pyramiding_x = kwargs.get('pyramiding_x', 0)
-        candle_ratio = kwargs.get('candle_ratio', 1.5)
+        volume_ratio = kwargs.get('volume_ratio', 2.0)
+        volume_exit_enabled = kwargs.get('volume_exit_enabled', True)
 
         enable_balance_orders = kwargs.get('enable_balance_orders', True)
         max_price_buy = kwargs.get('max_price_buy', float('inf'))
@@ -2359,7 +2359,7 @@ class BotManager:
                     coin_manager=self.coin_manager, symbol_locks=self.symbol_locks,
                     bot_coordinator=self.bot_coordinator, bot_id=bot_id, max_coins=1,
                     pyramiding_n=pyramiding_n, pyramiding_x=pyramiding_x,
-                    candle_ratio=candle_ratio,
+                    volume_ratio=volume_ratio, volume_exit_enabled=volume_exit_enabled,
                     enable_balance_orders=enable_balance_orders,
                     max_price_buy=max_price_buy, max_volume_buy=max_volume_buy,
                     min_price_sell=min_price_sell, min_volume_sell=min_volume_sell,
@@ -2376,22 +2376,21 @@ class BotManager:
         if created_count > 0:
             roi_info = f" | 🎯 ROI Kích hoạt: {roi_trigger}%" if roi_trigger else " | 🎯 ROI Kích hoạt: Tắt"
             pyramiding_info = f" | 🔄 Nhồi lệnh: {pyramiding_n} lần tại {pyramiding_x}%" if pyramiding_n > 0 and pyramiding_x > 0 else " | 🔄 Nhồi lệnh: Tắt"
-            candle_info = f" | 🕯️ Tỉ lệ nến: {candle_ratio}"
+            volume_info = f" | 📊 Tỉ lệ volume spike: {volume_ratio}x | Thoát volume: {'Bật' if volume_exit_enabled else 'Tắt'}"
             balance_info = ""
             if enable_balance_orders:
                 balance_info = (f"\n⚖️ <b>CÂN BẰNG LỆNH: BẬT</b>\n"
                                 f"• MUA: giá ≤ {max_price_buy} USDT, volume ≤ {max_volume_buy}\n"
-                                f"• BÁN: giá ≥ {min_price_sell} USDT, volume ≥ {min_volume_sell}\n"
-                                f"• SẮP XẾP: Theo khối lượng giảm dần\n")
-            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT CÂN BẰNG</b>\n\n"
+                                f"• BÁN: giá ≥ {min_price_sell} USDT, volume ≥ {min_volume_sell}\n")
+            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT CONTRARIAN VOLUME SPIKE</b>\n\n"
                            f"🎯 Chiến lược: {strategy_type}\n💰 Đòn bẩy: {lev}x\n"
                            f"📈 % Số dư: {percent}%\n🎯 TP: {tp}%\n"
-                           f"🛡️ SL: {sl if sl is not None else 'Tắt'}%{roi_info}{pyramiding_info}{candle_info}\n"
+                           f"🛡️ SL: {sl if sl is not None else 'Tắt'}%{roi_info}{pyramiding_info}{volume_info}\n"
                            f"🔧 Chế độ: {bot_mode}\n🔢 Số bot: {created_count}\n")
             if bot_mode == 'static' and symbol:
                 success_msg += f"🔗 Coin ban đầu: {symbol}\n"
             else:
-                success_msg += f"🔗 Coin: Tự động tìm (USDT/USDC) - sắp xếp theo volume\n"
+                success_msg += f"🔗 Coin: Tự động tìm (USDT/USDC) - dùng volume spike contrarian\n"
             success_msg += balance_info
             self.log(success_msg)
             return True
@@ -2605,7 +2604,7 @@ class BotManager:
             send_telegram("❌ Đã hủy thao tác.", chat_id=chat_id, reply_markup=create_main_menu(),
                          bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
 
-        # Luồng tạo bot
+        # Luồng tạo bot (cập nhật volume_ratio thay vì candle_ratio)
         elif current_step == 'waiting_bot_mode':
             if text == "🤖 Bot Tĩnh - Coin cụ thể":
                 user_state['bot_mode'] = 'static'
@@ -2706,17 +2705,17 @@ class BotManager:
         elif current_step == 'waiting_roi_trigger':
             if text == "❌ Tắt tính năng":
                 user_state['roi_trigger'] = None
-                user_state['step'] = 'waiting_candle_ratio'
-                send_telegram("🕯️ Chọn tỉ lệ nến tối thiểu để vào lệnh (nến hiện tại / nến trước > ngưỡng):",
-                             chat_id=chat_id, reply_markup=create_candle_ratio_keyboard(),
+                user_state['step'] = 'waiting_volume_ratio'
+                send_telegram("📊 Chọn tỉ lệ volume spike tối thiểu để vào lệnh (volume hiện tại / volume trước > ngưỡng):",
+                             chat_id=chat_id, reply_markup=create_volume_ratio_keyboard(),
                              bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
             elif text != "❌ Hủy bỏ":
                 try:
                     roi_trigger = float(text)
                     user_state['roi_trigger'] = roi_trigger
-                    user_state['step'] = 'waiting_candle_ratio'
-                    send_telegram("🕯️ Chọn tỉ lệ nến tối thiểu để vào lệnh (nến hiện tại / nến trước > ngưỡng):",
-                                 chat_id=chat_id, reply_markup=create_candle_ratio_keyboard(),
+                    user_state['step'] = 'waiting_volume_ratio'
+                    send_telegram("📊 Chọn tỉ lệ volume spike tối thiểu để vào lệnh (volume hiện tại / volume trước > ngưỡng):",
+                                 chat_id=chat_id, reply_markup=create_volume_ratio_keyboard(),
                                  bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
                 except:
                     send_telegram("⚠️ Vui lòng nhập số hợp lệ.", chat_id=chat_id,
@@ -2727,18 +2726,18 @@ class BotManager:
                 send_telegram("❌ Đã hủy.", chat_id=chat_id, reply_markup=create_main_menu(),
                              bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
 
-        elif current_step == 'waiting_candle_ratio':
-            if text == "❌ Bỏ qua (mặc định 1.5)":
-                user_state['candle_ratio'] = 1.5
+        elif current_step == 'waiting_volume_ratio':
+            if text == "❌ Bỏ qua (mặc định 2.0)":
+                user_state['volume_ratio'] = 2.0
             elif text != "❌ Hủy bỏ":
                 try:
                     val = float(text)
                     if val <= 0:
                         raise ValueError
-                    user_state['candle_ratio'] = val
+                    user_state['volume_ratio'] = val
                 except:
                     send_telegram("⚠️ Vui lòng nhập số > 0.", chat_id=chat_id,
-                                 reply_markup=create_candle_ratio_keyboard(),
+                                 reply_markup=create_volume_ratio_keyboard(),
                                  bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
                     return
             else:
@@ -3045,7 +3044,8 @@ class BotManager:
             bot_count = user_state.get('bot_count', 1)
             pyramiding_n = user_state.get('pyramiding_n', 0)
             pyramiding_x = user_state.get('pyramiding_x', 0)
-            candle_ratio = user_state.get('candle_ratio', 1.5)
+            volume_ratio = user_state.get('volume_ratio', 2.0)
+            volume_exit_enabled = True  # mặc định bật, có thể thêm tùy chọn sau
             enable_balance_orders = user_state.get('enable_balance_orders', True)
             max_price_buy = user_state.get('max_price_buy', float('inf'))
             max_volume_buy = user_state.get('max_volume_buy', float('inf'))
@@ -3054,10 +3054,10 @@ class BotManager:
 
             success = self.add_bot(
                 symbol=symbol, lev=leverage, percent=percent, tp=tp, sl=sl,
-                roi_trigger=roi_trigger, strategy_type="Balance-Strategy",
+                roi_trigger=roi_trigger, strategy_type="VolumeSpike-Strategy",
                 bot_mode=bot_mode, bot_count=bot_count,
                 pyramiding_n=pyramiding_n, pyramiding_x=pyramiding_x,
-                candle_ratio=candle_ratio,
+                volume_ratio=volume_ratio, volume_exit_enabled=volume_exit_enabled,
                 enable_balance_orders=enable_balance_orders,
                 max_price_buy=max_price_buy, max_volume_buy=max_volume_buy,
                 min_price_sell=min_price_sell, min_volume_sell=min_volume_sell
@@ -3066,18 +3066,18 @@ class BotManager:
             if success:
                 roi_info = f" | 🎯 ROI Kích hoạt: {roi_trigger}%" if roi_trigger else ""
                 pyramiding_info = f" | 🔄 Nhồi lệnh: {pyramiding_n} lần tại {pyramiding_x}%" if pyramiding_n > 0 and pyramiding_x > 0 else ""
-                candle_info = f" | 🕯️ Tỉ lệ nến: {candle_ratio}"
+                volume_info = f" | 📊 Tỉ lệ volume spike: {volume_ratio}x"
                 balance_info = " | ⚖️ Cân bằng: BẬT" if enable_balance_orders else " | ⚖️ Cân bằng: TẮT"
                 filter_info = ""
                 if enable_balance_orders:
                     filter_info = (f"\n📈 MUA: giá ≤ {max_price_buy} USDT, vol ≤ {max_volume_buy}"
                                    f"\n📉 BÁN: giá ≥ {min_price_sell} USDT, vol ≥ {min_volume_sell}")
 
-                success_msg = (f"✅ <b>ĐÃ TẠO BOT THÀNH CÔNG</b>\n\n"
-                              f"🤖 Chiến lược: Cân bằng lệnh\n🔧 Chế độ: {bot_mode}\n"
+                success_msg = (f"✅ <b>ĐÃ TẠO BOT VOLUME SPIKE CONTRARIAN THÀNH CÔNG</b>\n\n"
+                              f"🤖 Chiến lược: Volume Spike\n🔧 Chế độ: {bot_mode}\n"
                               f"🔢 Số bot: {bot_count}\n💰 Đòn bẩy: {leverage}x\n"
                               f"📊 % Số dư: {percent}%\n🎯 TP: {tp}%\n"
-                              f"🛡️ SL: {sl}%{roi_info}{pyramiding_info}{candle_info}{balance_info}{filter_info}")
+                              f"🛡️ SL: {sl}%{roi_info}{pyramiding_info}{volume_info}{balance_info}{filter_info}")
                 if bot_mode == 'static' and symbol:
                     success_msg += f"\n🔗 Coin: {symbol}"
 
