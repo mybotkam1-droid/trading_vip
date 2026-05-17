@@ -2646,6 +2646,3 @@ class BotManager:
 
 # ========== BỎ QUA SSL ==========
 ssl._create_default_https_context = ssl._create_unverified_context
-
-
-        print("Đã dừng hệ thống.")
