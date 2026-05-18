@@ -858,11 +858,7 @@ def compute_signal_from_candles(prev_candle, curr_candle):
             elif body_prev > body_curr:
                 return "BUY" if is_green_prev else "SELL"
             else:
-                # body bằng nhau, fallback sang logic cũ
-                if vol_prev > vol_curr:
-                    return "SELL" if is_green_curr else "BUY"
-                else:
-                    return "BUY" if is_green_curr else "SELL"
+                return None
 
         elif ratio > 4:
             # Ngược với nến có body dài hơn
@@ -871,19 +867,10 @@ def compute_signal_from_candles(prev_candle, curr_candle):
             elif body_prev > body_curr:
                 return "SELL" if is_green_prev else "BUY"
             else:
-                # body bằng nhau, fallback logic cũ
-                if vol_prev > vol_curr:
-                    return "SELL" if is_green_curr else "BUY"
-                else:
-                    return "BUY" if is_green_curr else "SELL"
+                return None
 
         else:  # 2 <= ratio <= 4
-            # Giữ nguyên logic cũ: so sánh volume
-            if vol_prev > vol_curr:
-                return "SELL" if is_green_curr else "BUY"
-            else:  # vol_prev <= vol_curr
-                return "BUY" if is_green_curr else "SELL"
-
+            return None
     except Exception as e:
         logger.error(f"Lỗi tính tín hiệu từ nến: {e}")
         return None
