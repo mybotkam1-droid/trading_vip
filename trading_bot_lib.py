@@ -818,38 +818,35 @@ def get_mark_price(symbol):
 # ========== HÀM PHÂN TÍCH TÍN HIỆU DỰA TRÊN 2 NẾN 15 PHÚT (CẢI TIẾN) ==========
 def compute_signal_from_candles(prev_candle, curr_candle):
     """
-    Tính tín hiệu giao dịch dựa trên 2 nến 15 phút.
-    Logic:
-        - Tính tỷ lệ volume (max/min)
-        - Nếu ratio < 2: tín hiệu theo nến có body dài hơn (cùng hướng nến đó)
-        - Nếu ratio > 4: tín hiệu ngược với nến có body dài hơn
-        - Nếu 2 <= ratio <= 4: dùng logic cũ (so sánh volume)
-    Trả về 'BUY' hoặc 'SELL', hoặc None nếu không đủ dữ liệu.
+    Tính tín hiệu dựa trên TỶ LỆ ĐỘ DÀI THÂN NẾN (body) giữa 2 nến 15 phút.
+    - ratio = max(body) / min(body)
+    - Nếu ratio < 2: tín hiệu theo hướng nến có body dài hơn
+    - Nếu ratio > 4: tín hiệu ngược với hướng nến có body dài hơn
+    - Nếu 2 <= ratio <= 4: không có tín hiệu (None)
+    - Xử lý body = 0 (nến có thân bằng 0) bằng fallback so sánh body trực tiếp.
     """
     try:
-        vol_prev = float(prev_candle[5])
-        vol_curr = float(curr_candle[5])
         open_prev = float(prev_candle[1])
         close_prev = float(prev_candle[4])
         open_curr = float(curr_candle[1])
         close_curr = float(curr_candle[4])
+
         body_prev = abs(close_prev - open_prev)
         body_curr = abs(close_curr - open_curr)
+
         is_green_prev = close_prev > open_prev
         is_green_curr = close_curr > open_curr
 
-        # Xử lý trường hợp volume = 0
-        if vol_prev == 0 or vol_curr == 0:
-            # Fallback: so sánh body
+        # Xử lý body = 0
+        if body_prev == 0 or body_curr == 0:
             if body_curr > body_prev:
                 return "BUY" if is_green_curr else "SELL"
             elif body_prev > body_curr:
                 return "BUY" if is_green_prev else "SELL"
             else:
-                # body bằng nhau -> dùng volume cũ (ưu tiên nến hiện tại)
-                return "SELL" if is_green_curr else "BUY" if vol_prev > vol_curr else ("BUY" if is_green_curr else "SELL")
+                return None
 
-        ratio = max(vol_prev, vol_curr) / min(vol_prev, vol_curr)
+        ratio = max(body_prev, body_curr) / min(body_prev, body_curr)
 
         if ratio < 2:
             # Đi theo nến có body dài hơn
@@ -859,8 +856,7 @@ def compute_signal_from_candles(prev_candle, curr_candle):
                 return "BUY" if is_green_prev else "SELL"
             else:
                 return None
-
-        elif ratio > 4:
+        elif ratio > 5:
             # Ngược với nến có body dài hơn
             if body_curr > body_prev:
                 return "SELL" if is_green_curr else "BUY"
@@ -868,9 +864,9 @@ def compute_signal_from_candles(prev_candle, curr_candle):
                 return "SELL" if is_green_prev else "BUY"
             else:
                 return None
-
         else:  # 2 <= ratio <= 4
             return None
+
     except Exception as e:
         logger.error(f"Lỗi tính tín hiệu từ nến: {e}")
         return None
