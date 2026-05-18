@@ -823,8 +823,8 @@ def compute_signal_from_candles(prev_candle, curr_candle):
         - Tính tỷ lệ volume (max/min)
         - Nếu ratio < 2: tín hiệu theo nến có body dài hơn (cùng hướng nến đó)
         - Nếu ratio > 4: tín hiệu ngược với nến có body dài hơn
-        - Nếu 2 <= ratio <= 4: dùng logic cũ (so sánh volume)
-    Trả về 'BUY' hoặc 'SELL', hoặc None nếu không đủ dữ liệu.
+        - Nếu 2 <= ratio <= 4: không có tín hiệu
+    Trả về 'BUY' hoặc 'SELL', hoặc None.
     """
     try:
         vol_prev = float(prev_candle[5])
@@ -838,43 +838,60 @@ def compute_signal_from_candles(prev_candle, curr_candle):
         is_green_prev = close_prev > open_prev
         is_green_curr = close_curr > open_curr
 
-        # Xử lý trường hợp volume = 0
+        # Log chi tiết
+        logger.info(f"📊 TÍN HIỆU: prev_vol={vol_prev:.0f}, curr_vol={vol_curr:.0f}, prev_body={body_prev:.4f}, curr_body={body_curr:.4f}")
+        logger.info(f"   prev_green={is_green_prev}, curr_green={is_green_curr}")
+
+        # Xử lý volume = 0
         if vol_prev == 0 or vol_curr == 0:
-            # Fallback: so sánh body
+            logger.warning("⚠️ Có volume bằng 0, fallback so sánh body")
             if body_curr > body_prev:
-                return "BUY" if is_green_curr else "SELL"
+                signal = "BUY" if is_green_curr else "SELL"
+                logger.info(f"   volume=0 case: body_curr > body_prev -> signal={signal}")
+                return signal
             elif body_prev > body_curr:
-                return "BUY" if is_green_prev else "SELL"
+                signal = "BUY" if is_green_prev else "SELL"
+                logger.info(f"   volume=0 case: body_prev > body_curr -> signal={signal}")
+                return signal
             else:
-                # body bằng nhau -> dùng volume cũ (ưu tiên nến hiện tại)
-                return "SELL" if is_green_curr else "BUY" if vol_prev > vol_curr else ("BUY" if is_green_curr else "SELL")
+                signal = "SELL" if is_green_curr else "BUY" if vol_prev > vol_curr else ("BUY" if is_green_curr else "SELL")
+                logger.info(f"   volume=0 case: body equal -> signal={signal}")
+                return signal
 
         ratio = max(vol_prev, vol_curr) / min(vol_prev, vol_curr)
+        logger.info(f"   volume ratio = {ratio:.2f}")
 
         if ratio < 2:
-            # Đi theo nến có body dài hơn
             if body_curr > body_prev:
-                return "BUY" if is_green_curr else "SELL"
+                signal = "BUY" if is_green_curr else "SELL"
+                logger.info(f"   ratio<2, body_curr > body_prev -> theo nến curr: {signal}")
             elif body_prev > body_curr:
-                return "BUY" if is_green_prev else "SELL"
+                signal = "BUY" if is_green_prev else "SELL"
+                logger.info(f"   ratio<2, body_prev > body_curr -> theo nến prev: {signal}")
             else:
-                return None
+                signal = None
+                logger.info(f"   ratio<2, body bằng nhau -> không có tín hiệu")
+            return signal
 
-        elif ratio > 4:
-            # Ngược với nến có body dài hơn
+        elif ratio > 5:
             if body_curr > body_prev:
-                return "SELL" if is_green_curr else "BUY"
+                signal = "SELL" if is_green_curr else "BUY"
+                logger.info(f"   ratio>4, body_curr > body_prev -> ngược nến curr: {signal}")
             elif body_prev > body_curr:
-                return "SELL" if is_green_prev else "BUY"
+                signal = "SELL" if is_green_prev else "BUY"
+                logger.info(f"   ratio>4, body_prev > body_curr -> ngược nến prev: {signal}")
             else:
-                return None
+                signal = None
+                logger.info(f"   ratio>4, body bằng nhau -> không có tín hiệu")
+            return signal
 
-        else:  # 2 <= ratio <= 4
+        else:
+            logger.info(f"   ratio={ratio:.2f} trong khoảng [2,4] -> không có tín hiệu")
             return None
+
     except Exception as e:
         logger.error(f"Lỗi tính tín hiệu từ nến: {e}")
         return None
-
 def get_candle_signal_15m(symbol):
     """
     Lấy 2 nến 15 phút gần nhất và trả về tín hiệu 'BUY'/'SELL' dựa trên logic mới.
@@ -884,10 +901,14 @@ def get_candle_signal_15m(symbol):
         params = {"symbol": symbol.upper(), "interval": "15m", "limit": 2}
         data = binance_api_request(url, params=params)
         if not data or len(data) < 2:
+            logger.warning(f"⚠️ Không lấy được 2 nến 15m cho {symbol}")
             return None
-        prev = data[0]
-        curr = data[1]
-        return compute_signal_from_candles(prev, curr)
+        # Log thời gian đóng của nến hiện tại (nến thứ 2)
+        close_time_curr = datetime.fromtimestamp(data[1][6]/1000).strftime('%Y-%m-%d %H:%M:%S')
+        logger.info(f"📅 {symbol} - Nến 15m vừa đóng lúc {close_time_curr}")
+        signal = compute_signal_from_candles(data[0], data[1])
+        logger.info(f"🎯 {symbol} -> Tín hiệu từ 2 nến 15m: {signal}")
+        return signal
     except Exception as e:
         logger.error(f"Lỗi phân tích tín hiệu nến 15m {symbol}: {e}")
         return None
@@ -1100,6 +1121,7 @@ class SmartCoinFinder:
 
                 # Kiểm tra tín hiệu nến 15 phút mới
                 local_signal = get_candle_signal_15m(symbol)
+                logger.info(f"🔎 Xét coin {symbol}: global_side={global_side}, local_signal={local_signal}")
                 if local_signal is None or local_signal != global_side:
                     continue
 
@@ -1523,6 +1545,7 @@ class BaseBot:
                     return False
 
                 # Kiểm tra tín hiệu nến 15 phút ngay trước khi vào lệnh (dùng logic mới)
+                logger.info(f"🔍 KIỂM TRA TÍN HIỆU TRƯỚC KHI VÀO LỆNH {symbol}, side dự kiến: {side}")
                 local_signal = get_candle_signal_15m(symbol)
                 if local_signal is None or local_signal != side:
                     self.log(f"⚠️ {symbol} tín hiệu nến không còn phù hợp ({local_signal} vs {side})")
