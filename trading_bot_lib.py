@@ -1,9 +1,7 @@
 # trading_bot_15m_candle_signal.py
 # =============================================================================
-#  BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 15 PHÚT (KHỐI LƯỢNG)
-#  - Vào lệnh: so sánh volume nến trước và nến hiện tại
-#      * Nếu vol_prev > vol_curr → vào NGƯỢC hướng nến hiện tại
-#      * Nếu vol_prev <= vol_curr → vào CÙNG hướng nến hiện tại
+#  BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 15 PHÚT (KHỐI LƯỢNG + ĐỘ DÀI THÂN NẾN)
+#  - Vào lệnh dựa trên tỷ lệ volume và body giữa 2 nến 15 phút gần nhất.
 #  - Thoát lệnh: khi một nến 15 phút mới đóng và tín hiệu của nến đó
 #    ngược với hướng vị thế đang giữ → đóng lệnh.
 #  - Không dùng TP/SL, không ROI trigger, không pyramiding.
@@ -817,15 +815,82 @@ def get_mark_price(symbol):
     _mark_price_time[symbol] = now
     return price
 
-# ========== HÀM PHÂN TÍCH TÍN HIỆU DỰA TRÊN 2 NẾN 15 PHÚT ==========
+# ========== HÀM PHÂN TÍCH TÍN HIỆU DỰA TRÊN 2 NẾN 15 PHÚT (CẢI TIẾN) ==========
+def compute_signal_from_candles(prev_candle, curr_candle):
+    """
+    Tính tín hiệu giao dịch dựa trên 2 nến 15 phút.
+    Logic:
+        - Tính tỷ lệ volume (max/min)
+        - Nếu ratio < 2: tín hiệu theo nến có body dài hơn (cùng hướng nến đó)
+        - Nếu ratio > 4: tín hiệu ngược với nến có body dài hơn
+        - Nếu 2 <= ratio <= 4: dùng logic cũ (so sánh volume)
+    Trả về 'BUY' hoặc 'SELL', hoặc None nếu không đủ dữ liệu.
+    """
+    try:
+        vol_prev = float(prev_candle[5])
+        vol_curr = float(curr_candle[5])
+        open_prev = float(prev_candle[1])
+        close_prev = float(prev_candle[4])
+        open_curr = float(curr_candle[1])
+        close_curr = float(curr_candle[4])
+        body_prev = abs(close_prev - open_prev)
+        body_curr = abs(close_curr - open_curr)
+        is_green_prev = close_prev > open_prev
+        is_green_curr = close_curr > open_curr
+
+        # Xử lý trường hợp volume = 0
+        if vol_prev == 0 or vol_curr == 0:
+            # Fallback: so sánh body
+            if body_curr > body_prev:
+                return "BUY" if is_green_curr else "SELL"
+            elif body_prev > body_curr:
+                return "BUY" if is_green_prev else "SELL"
+            else:
+                # body bằng nhau -> dùng volume cũ (ưu tiên nến hiện tại)
+                return "SELL" if is_green_curr else "BUY" if vol_prev > vol_curr else ("BUY" if is_green_curr else "SELL")
+
+        ratio = max(vol_prev, vol_curr) / min(vol_prev, vol_curr)
+
+        if ratio < 2:
+            # Đi theo nến có body dài hơn
+            if body_curr > body_prev:
+                return "BUY" if is_green_curr else "SELL"
+            elif body_prev > body_curr:
+                return "BUY" if is_green_prev else "SELL"
+            else:
+                # body bằng nhau, fallback sang logic cũ
+                if vol_prev > vol_curr:
+                    return "SELL" if is_green_curr else "BUY"
+                else:
+                    return "BUY" if is_green_curr else "SELL"
+
+        elif ratio > 4:
+            # Ngược với nến có body dài hơn
+            if body_curr > body_prev:
+                return "SELL" if is_green_curr else "BUY"
+            elif body_prev > body_curr:
+                return "SELL" if is_green_prev else "BUY"
+            else:
+                # body bằng nhau, fallback logic cũ
+                if vol_prev > vol_curr:
+                    return "SELL" if is_green_curr else "BUY"
+                else:
+                    return "BUY" if is_green_curr else "SELL"
+
+        else:  # 2 <= ratio <= 4
+            # Giữ nguyên logic cũ: so sánh volume
+            if vol_prev > vol_curr:
+                return "SELL" if is_green_curr else "BUY"
+            else:  # vol_prev <= vol_curr
+                return "BUY" if is_green_curr else "SELL"
+
+    except Exception as e:
+        logger.error(f"Lỗi tính tín hiệu từ nến: {e}")
+        return None
+
 def get_candle_signal_15m(symbol):
     """
-    Phân tích 2 nến 15 phút gần nhất:
-    - Nếu vol_prev > vol_curr: tín hiệu NGƯỢC hướng với nến hiện tại
-      (nến green -> SELL, nến red -> BUY)
-    - Nếu vol_prev <= vol_curr: tín hiệu CÙNG hướng với nến hiện tại
-      (nến green -> BUY, nến red -> SELL)
-    Trả về 'BUY', 'SELL' hoặc None nếu không đủ dữ liệu.
+    Lấy 2 nến 15 phút gần nhất và trả về tín hiệu 'BUY'/'SELL' dựa trên logic mới.
     """
     try:
         url = "https://fapi.binance.com/fapi/v1/klines"
@@ -835,18 +900,7 @@ def get_candle_signal_15m(symbol):
             return None
         prev = data[0]
         curr = data[1]
-        vol_prev = float(prev[5])
-        vol_curr = float(curr[5])
-        open_curr = float(curr[1])
-        close_curr = float(curr[4])
-        is_green = close_curr > open_curr
-
-        if vol_prev > vol_curr:
-            # Ngược hướng với nến hiện tại
-            return "SELL" if is_green else "BUY"
-        else:  # vol_prev <= vol_curr
-            # Cùng hướng với nến hiện tại
-            return "BUY" if is_green else "SELL"
+        return compute_signal_from_candles(prev, curr)
     except Exception as e:
         logger.error(f"Lỗi phân tích tín hiệu nến 15m {symbol}: {e}")
         return None
@@ -1057,7 +1111,7 @@ class SmartCoinFinder:
                 if self._bot_manager and self._bot_manager.coin_manager.is_coin_active(symbol):
                     continue
 
-                # Kiểm tra tín hiệu nến 15 phút
+                # Kiểm tra tín hiệu nến 15 phút mới
                 local_signal = get_candle_signal_15m(symbol)
                 if local_signal is None or local_signal != global_side:
                     continue
@@ -1154,7 +1208,7 @@ class WebSocketManager:
             self.remove_symbol(symbol)
         self.executor.shutdown(wait=False)
 
-# ========== LỚP BaseBot (CHỈ DÙNG TÍN HIỆU 15M, KHÔNG TP/SL, KHÔNG PYRAMIDING) ==========
+# ========== LỚP BaseBot (CHỈ DÙNG TÍN HIỆU 15M CẢI TIẾN, KHÔNG TP/SL, KHÔNG PYRAMIDING) ==========
 class BaseBot:
     def __init__(self, symbol, lev, percent, ws_manager, api_key, api_secret,
                  telegram_bot_token, telegram_chat_id, strategy_name, config_key=None, bot_id=None,
@@ -1247,7 +1301,7 @@ class BaseBot:
         self.thread = threading.Thread(target=self._run, daemon=True, name=f"bot-{self.bot_id[-8:]}")
         self.thread.start()
 
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: 2 nến 15m | Không TP/SL")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: 2 nến 15m (volume+body) | Không TP/SL")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1343,7 +1397,7 @@ class BaseBot:
                 symbol_info['last_position_check'] = current_time
 
             if symbol_info['position_open']:
-                # Chỉ kiểm tra thoát lệnh theo nến 15 phút
+                # Chỉ kiểm tra thoát lệnh theo nến 15 phút (dùng logic mới)
                 self._check_candle_exit_15m(symbol)
                 return False
             else:
@@ -1481,7 +1535,7 @@ class BaseBot:
                     self.stop_symbol(symbol, failed=True)
                     return False
 
-                # Kiểm tra tín hiệu nến 15 phút ngay trước khi vào lệnh
+                # Kiểm tra tín hiệu nến 15 phút ngay trước khi vào lệnh (dùng logic mới)
                 local_signal = get_candle_signal_15m(symbol)
                 if local_signal is None or local_signal != side:
                     self.log(f"⚠️ {symbol} tín hiệu nến không còn phù hợp ({local_signal} vs {side})")
@@ -1599,7 +1653,7 @@ class BaseBot:
                                f"🏷️ Entry: {self.symbol_data[symbol]['entry']:.4f}\n"
                                f"📊 Khối lượng: {abs(self.symbol_data[symbol]['qty']):.4f}\n"
                                f"💰 Đòn bẩy: {self.lev}x\n"
-                               f"🎯 Thoát: Khi nến 15m ngược hướng")
+                               f"🎯 Thoát: Khi nến 15m (volume+body) ngược hướng")
                     self.log(message)
                     return True
                 else:
@@ -1613,9 +1667,9 @@ class BaseBot:
                 self.stop_symbol(symbol, failed=True)
                 return False
 
-    # ---------- THOÁT LỆNH THEO NẾN 15 PHÚT ----------
+    # ---------- THOÁT LỆNH THEO NẾN 15 PHÚT (DÙNG LOGIC MỚI) ----------
     def _check_candle_exit_15m(self, symbol):
-        """Kiểm tra nến 15 phút vừa đóng: nếu tín hiệu ngược hướng thì đóng lệnh"""
+        """Kiểm tra nến 15 phút vừa đóng: nếu tín hiệu (dựa trên volume+body) ngược hướng thì đóng lệnh"""
         if symbol not in self.symbol_data:
             return False
         data = self.symbol_data[symbol]
@@ -1639,33 +1693,27 @@ class BaseBot:
             # Nến mới đã đóng, cập nhật thời gian đã xử lý
             self.last_candle_check[symbol] = close_time_sec
 
-            # Lấy 2 nến gần nhất để tính tín hiệu
+            # Lấy 2 nến gần nhất để tính tín hiệu (prev và curr)
             params2 = {"symbol": symbol.upper(), "interval": "15m", "limit": 2}
             klines = binance_api_request(url, params=params2)
             if not klines or len(klines) < 2:
                 return False
             prev = klines[0]
             curr = klines[1]
-            vol_prev = float(prev[5])
-            vol_curr = float(curr[5])
-            open_curr = float(curr[1])
-            close_curr = float(curr[4])
-            is_green = close_curr > open_curr
 
-            if vol_prev > vol_curr:
-                signal = "SELL" if is_green else "BUY"
-            else:
-                signal = "BUY" if is_green else "SELL"
+            # Dùng hàm tính tín hiệu mới
+            signal = compute_signal_from_candles(prev, curr)
+            if signal is None:
+                return False
 
             current_side = data['side']
-            if signal is not None and signal != current_side:
-                self.log(f"🕯️ {symbol} - Nến 15m đóng ngược hướng ({signal} vs {current_side}), đóng lệnh")
+            if signal != current_side:
+                self.log(f"🕯️ {symbol} - Nến 15m đóng ngược hướng (tín hiệu {signal} vs {current_side}), đóng lệnh")
                 if self._close_symbol_position(symbol, reason="(Candle 15m opposite)"):
                     self._blacklist_and_stop_symbol(symbol, reason="Candle 15m opposite")
                 return True
             else:
-                # Cùng hướng, giữ lệnh
-                self.log(f"🕯️ {symbol} - Nến 15m đóng cùng hướng ({signal} vs {current_side}), giữ lệnh")
+                self.log(f"🕯️ {symbol} - Nến 15m đóng cùng hướng (tín hiệu {signal} vs {current_side}), giữ lệnh")
                 return False
         except Exception as e:
             logger.error(f"Lỗi kiểm tra nến thoát 15m {symbol}: {e}")
@@ -1860,7 +1908,7 @@ class BotManager:
 
         if api_key and api_secret:
             self._verify_api_connection()
-            self.log("🟢 HỆ THỐNG BOT TÍN HIỆU 2 NẾN 15 PHÚT - KHÔNG TP/SL - THOÁT THEO NẾN")
+            self.log("🟢 HỆ THỐNG BOT TÍN HIỆU 2 NẾN 15 PHÚT (VOLUME + BODY) - KHÔNG TP/SL - THOÁT THEO NẾN")
             self._initialize_cache()
             self._cache_thread = threading.Thread(target=self._cache_updater, daemon=True, name='cache_updater')
             self._cache_thread.start()
@@ -1947,7 +1995,7 @@ class BotManager:
                     'balance_orders': "BẬT" if hasattr(bot, 'enable_balance_orders') and bot.enable_balance_orders else "TẮT",
                 })
 
-            summary = "📊 **THỐNG KÊ CHI TIẾT - HỆ THỐNG TÍN HIỆU 2 NẾN 15 PHÚT (USDT/USDC)**\n\n"
+            summary = "📊 **THỐNG KÊ CHI TIẾT - HỆ THỐNG TÍN HIỆU 2 NẾN 15 PHÚT (VOLUME+BODY) (USDT/USDC)**\n\n"
 
             cache_stats = _COINS_CACHE.get_stats()
             coins_in_cache = cache_stats['count']
@@ -2017,14 +2065,15 @@ class BotManager:
 
     def send_main_menu(self, chat_id):
         welcome = (
-            "🤖 <b>BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 15 PHÚT (USDT/USDC)</b>\n\n"
-            "🎯 <b>CƠ CHẾ HOẠT ĐỘNG:</b>\n"
+            "🤖 <b>BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 15 PHÚT (VOLUME + BODY)</b>\n\n"
+            "🎯 <b>CƠ CHẾ HOẠT ĐỘNG MỚI:</b>\n"
             "• So sánh khối lượng 2 nến 15 phút gần nhất:\n"
-            "  - Nếu vol_prev > vol_curr → vào lệnh NGƯỢC hướng nến hiện tại\n"
-            "  - Nếu vol_prev ≤ vol_curr → vào lệnh CÙNG hướng nến hiện tại\n"
-            "• Kết hợp với cân bằng số lượng lệnh BUY/SELL toàn cục\n\n"
+            "  - Nếu tỷ lệ volume < 2 → tín hiệu theo nến có thân (body) dài hơn (cùng hướng).\n"
+            "  - Nếu tỷ lệ volume > 4 → tín hiệu ngược với nến có body dài hơn.\n"
+            "  - Nếu 2 ≤ tỷ lệ ≤ 4 → dùng logic cũ (so sánh volume để vào cùng/ngược).\n"
+            "• Kết hợp với cân bằng số lượng lệnh BUY/SELL toàn cục.\n\n"
             "🔄 <b>QUẢN LÝ LỆNH:</b>\n"
-            "• KHÔNG dùng TP/SL. Thoát lệnh khi một nến 15 phút đóng và tín hiệu của nến đó\n"
+            "• KHÔNG dùng TP/SL. Thoát lệnh khi một nến 15 phút đóng và tín hiệu (volume+body)\n"
             "  NGƯỢC với hướng vị thế đang giữ.\n"
             "• Nếu tín hiệu cùng hướng → giữ lệnh, chờ nến tiếp theo.\n\n"
             "⚖️ <b>LỌC COIN (nếu bật cân bằng lệnh):</b>\n"
@@ -2081,14 +2130,14 @@ class BotManager:
                 balance_info = (f"\n⚖️ <b>CÂN BẰNG LỆNH: BẬT</b>\n"
                                 f"• MUA: giá ≤ {max_price_buy} USDT, volume ≤ {max_volume_buy}\n"
                                 f"• BÁN: giá ≥ {min_price_sell} USDT, volume ≥ {min_volume_sell}\n")
-            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT TÍN HIỆU 2 NẾN 15 PHÚT</b>\n\n"
+            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT TÍN HIỆU 2 NẾN 15 PHÚT (VOLUME+BODY)</b>\n\n"
                            f"🎯 Chiến lược: {strategy_type}\n💰 Đòn bẩy: {lev}x\n"
                            f"📈 % Số dư: {percent}%\n"
                            f"🔧 Chế độ: {bot_mode}\n🔢 Số bot: {created_count}\n")
             if bot_mode == 'static' and symbol:
                 success_msg += f"🔗 Coin ban đầu: {symbol}\n"
             else:
-                success_msg += f"🔗 Coin: Tự động tìm (USDT/USDC) - dùng tín hiệu 2 nến 15 phút\n"
+                success_msg += f"🔗 Coin: Tự động tìm (USDT/USDC) - dùng tín hiệu 2 nến 15m (volume+body)\n"
             success_msg += balance_info
             self.log(success_msg)
             return True
@@ -2623,11 +2672,11 @@ class BotManager:
                     filter_info = (f"\n📈 MUA: giá ≤ {max_price_buy} USDT, vol ≤ {max_volume_buy}"
                                    f"\n📉 BÁN: giá ≥ {min_price_sell} USDT, vol ≥ {min_volume_sell}")
 
-                success_msg = (f"✅ <b>ĐÃ TẠO BOT TÍN HIỆU 2 NẾN 15 PHÚT THÀNH CÔNG</b>\n\n"
+                success_msg = (f"✅ <b>ĐÃ TẠO BOT TÍN HIỆU 2 NẾN 15 PHÚT (VOLUME+BODY) THÀNH CÔNG</b>\n\n"
                                f"🤖 Chiến lược: 15m Candle Signal\n🔧 Chế độ: {bot_mode}\n"
                                f"🔢 Số bot: {bot_count}\n💰 Đòn bẩy: {leverage}x\n"
                                f"📊 % Số dư: {percent}%\n"
-                               f"🎯 Thoát: Khi nến 15m ngược hướng{balance_info}{filter_info}")
+                               f"🎯 Thoát: Khi nến 15m (volume+body) ngược hướng{balance_info}{filter_info}")
                 if bot_mode == 'static' and symbol:
                     success_msg += f"\n🔗 Coin: {symbol}"
 
