@@ -818,45 +818,45 @@ def get_mark_price(symbol):
 # ========== HÀM PHÂN TÍCH TÍN HIỆU DỰA TRÊN 2 NẾN 15 PHÚT (CẢI TIẾN) ==========
 def compute_signal_from_candles(prev_candle, curr_candle):
     """
-    Tín hiệu dựa SO SÁNH KHỐI LƯỢNG (volume) giữa 2 nến 15 phút gần nhất.
-    - Nếu volume nến hiện tại (curr) > volume nến trước (prev)  → tín hiệu theo hướng nến hiện tại.
-    - Nếu volume nến hiện tại <= volume nến trước               → tín hiệu theo hướng nến trước.
-    - Không dùng body length, không dùng tỷ lệ.
+    Tín hiệu kết hợp volume + chiều dài nến.
+
+    Logic:
+    - Chỉ xét nến hiện tại.
+    - Nếu volume nến hiện tại > volume nến trước
+      VÀ chiều dài thân nến hiện tại > chiều dài thân nến trước
+      => đi theo hướng nến hiện tại.
+    - Còn lại => None, không có tín hiệu.
     """
     try:
-        # Lấy giá đóng/mở của 2 nến
+        # Giá mở/đóng của 2 nến
         open_prev = float(prev_candle[1])
         close_prev = float(prev_candle[4])
+
         open_curr = float(curr_candle[1])
         close_curr = float(curr_candle[4])
 
-        # Lấy volume (khối lượng) của 2 nến
-        # Trong Binance kline: chỉ số 5 là volume (base asset volume)
+        # Volume của 2 nến
         volume_prev = float(prev_candle[5])
         volume_curr = float(curr_candle[5])
 
-        # Xác định hướng (BUY/SELL) của từng nến
-        is_green_prev = close_prev > open_prev   # nến xanh → BUY
-        is_green_curr = close_curr > open_curr
+        # Chiều dài thân nến
+        body_prev = abs(close_prev - open_prev)
+        body_curr = abs(close_curr - open_curr)
 
-        # Xử lý volume = 0 (nếu có)
-        if volume_curr == 0 and volume_prev == 0:
-            return None
-        if volume_curr == 0:
-            return "BUY" if is_green_prev else "SELL"
-        if volume_prev == 0:
-            return "BUY" if is_green_curr else "SELL"
+        # Nếu nến hiện tại mạnh hơn nến trước cả volume và thân nến
+        if volume_curr > volume_prev and body_curr > body_prev:
+            if close_curr > open_curr:
+                return "BUY"
+            elif close_curr < open_curr:
+                return "SELL"
+            else:
+                return None
 
-        # Logic chính: so sánh volume
-        if volume_curr > volume_prev:
-            # Theo hướng nến hiện tại
-            return "BUY" if is_green_curr else "SELL"
-        else:
-            # Theo hướng nến trước
-            return "BUY" if is_green_prev else "SELL"
+        # Còn lại không có tín hiệu
+        return None
 
     except Exception as e:
-        logger.error(f"Lỗi tính tín hiệu từ nến (volume): {e}")
+        logger.error(f"Lỗi tính tín hiệu từ nến (volume + body): {e}")
         return None
 def get_candle_signal_1m(symbol):
     """
