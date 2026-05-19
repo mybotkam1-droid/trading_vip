@@ -818,59 +818,46 @@ def get_mark_price(symbol):
 # ========== HÀM PHÂN TÍCH TÍN HIỆU DỰA TRÊN 2 NẾN 15 PHÚT (CẢI TIẾN) ==========
 def compute_signal_from_candles(prev_candle, curr_candle):
     """
-    Tính tín hiệu dựa trên TỶ LỆ ĐỘ DÀI THÂN NẾN (body) giữa 2 nến 15 phút.
-    - ratio = max(body) / min(body)
-    - Nếu ratio < 2: tín hiệu theo hướng nến có body dài hơn
-    - Nếu ratio > 4: tín hiệu ngược với hướng nến có body dài hơn
-    - Nếu 2 <= ratio <= 4: không có tín hiệu (None)
-    - Xử lý body = 0 (nến có thân bằng 0) bằng fallback so sánh body trực tiếp.
+    Tín hiệu dựa SO SÁNH KHỐI LƯỢNG (volume) giữa 2 nến 15 phút gần nhất.
+    - Nếu volume nến hiện tại (curr) > volume nến trước (prev)  → tín hiệu theo hướng nến hiện tại.
+    - Nếu volume nến hiện tại <= volume nến trước               → tín hiệu theo hướng nến trước.
+    - Không dùng body length, không dùng tỷ lệ.
     """
     try:
+        # Lấy giá đóng/mở của 2 nến
         open_prev = float(prev_candle[1])
         close_prev = float(prev_candle[4])
         open_curr = float(curr_candle[1])
         close_curr = float(curr_candle[4])
 
-        body_prev = abs(close_prev - open_prev)
-        body_curr = abs(close_curr - open_curr)
+        # Lấy volume (khối lượng) của 2 nến
+        # Trong Binance kline: chỉ số 5 là volume (base asset volume)
+        volume_prev = float(prev_candle[5])
+        volume_curr = float(curr_candle[5])
 
-        is_green_prev = close_prev > open_prev
+        # Xác định hướng (BUY/SELL) của từng nến
+        is_green_prev = close_prev > open_prev   # nến xanh → BUY
         is_green_curr = close_curr > open_curr
 
-        # Xử lý body = 0
-        if body_prev == 0 or body_curr == 0:
-            if body_curr > body_prev:
-                return "BUY" if is_green_curr else "SELL"
-            elif body_prev > body_curr:
-                return "BUY" if is_green_prev else "SELL"
-            else:
-                return None
-
-        ratio = max(body_prev, body_curr) / min(body_prev, body_curr)
-
-        if ratio < 2:
-            # Đi theo nến có body dài hơn
-            if body_curr > body_prev:
-                return "BUY" if is_green_curr else "SELL"
-            elif body_prev > body_curr:
-                return "BUY" if is_green_prev else "SELL"
-            else:
-                return None
-        elif ratio > 5:
-            # Ngược với nến có body dài hơn
-            if body_curr > body_prev:
-                return "SELL" if is_green_curr else "BUY"
-            elif body_prev > body_curr:
-                return "SELL" if is_green_prev else "BUY"
-            else:
-                return None
-        else:  # 2 <= ratio <= 4
+        # Xử lý volume = 0 (nếu có)
+        if volume_curr == 0 and volume_prev == 0:
             return None
+        if volume_curr == 0:
+            return "BUY" if is_green_prev else "SELL"
+        if volume_prev == 0:
+            return "BUY" if is_green_curr else "SELL"
+
+        # Logic chính: so sánh volume
+        if volume_curr > volume_prev:
+            # Theo hướng nến hiện tại
+            return "BUY" if is_green_curr else "SELL"
+        else:
+            # Theo hướng nến trước
+            return "BUY" if is_green_prev else "SELL"
 
     except Exception as e:
-        logger.error(f"Lỗi tính tín hiệu từ nến: {e}")
+        logger.error(f"Lỗi tính tín hiệu từ nến (volume): {e}")
         return None
-
 def get_candle_signal_15m(symbol):
     """
     Lấy 2 nến 15 phút gần nhất và trả về tín hiệu 'BUY'/'SELL' dựa trên logic mới.
