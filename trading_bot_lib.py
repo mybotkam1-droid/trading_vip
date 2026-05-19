@@ -1,4 +1,4 @@
-# trading_bot_15m_candle_signal.py
+# trading_bot_1m_candle_signal.py
 # =============================================================================
 #  BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 15 PHÚT (KHỐI LƯỢNG + ĐỘ DÀI THÂN NẾN)
 #  - Vào lệnh dựa trên tỷ lệ volume và body giữa 2 nến 15 phút gần nhất.
@@ -858,13 +858,13 @@ def compute_signal_from_candles(prev_candle, curr_candle):
     except Exception as e:
         logger.error(f"Lỗi tính tín hiệu từ nến (volume): {e}")
         return None
-def get_candle_signal_15m(symbol):
+def get_candle_signal_1m(symbol):
     """
     Lấy 2 nến 15 phút gần nhất và trả về tín hiệu 'BUY'/'SELL' dựa trên logic mới.
     """
     try:
         url = "https://fapi.binance.com/fapi/v1/klines"
-        params = {"symbol": symbol.upper(), "interval": "15m", "limit": 2}
+        params = {"symbol": symbol.upper(), "interval": "1m", "limit": 2}
         data = binance_api_request(url, params=params)
         if not data or len(data) < 2:
             return None
@@ -872,7 +872,7 @@ def get_candle_signal_15m(symbol):
         curr = data[1]
         return compute_signal_from_candles(prev, curr)
     except Exception as e:
-        logger.error(f"Lỗi phân tích tín hiệu nến 15m {symbol}: {e}")
+        logger.error(f"Lỗi phân tích tín hiệu nến 1m {symbol}: {e}")
         return None
 
 # ========== HÀM KIỂM TRA VỊ THẾ ==========
@@ -1082,7 +1082,7 @@ class SmartCoinFinder:
                     continue
 
                 # Kiểm tra tín hiệu nến 15 phút mới
-                local_signal = get_candle_signal_15m(symbol)
+                local_signal = get_candle_signal_1m(symbol)
                 if local_signal is None or local_signal != global_side:
                     continue
 
@@ -1178,7 +1178,7 @@ class WebSocketManager:
             self.remove_symbol(symbol)
         self.executor.shutdown(wait=False)
 
-# ========== LỚP BaseBot (CHỈ DÙNG TÍN HIỆU 15M CẢI TIẾN, KHÔNG TP/SL, KHÔNG PYRAMIDING) ==========
+# ========== LỚP BaseBot (CHỈ DÙNG TÍN HIỆU 1m CẢI TIẾN, KHÔNG TP/SL, KHÔNG PYRAMIDING) ==========
 class BaseBot:
     def __init__(self, symbol, lev, percent, ws_manager, api_key, api_secret,
                  telegram_bot_token, telegram_chat_id, strategy_name, config_key=None, bot_id=None,
@@ -1271,7 +1271,7 @@ class BaseBot:
         self.thread = threading.Thread(target=self._run, daemon=True, name=f"bot-{self.bot_id[-8:]}")
         self.thread.start()
 
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: 2 nến 15m (volume+body) | Không TP/SL")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: 2 nến 1m (volume+body) | Không TP/SL")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1368,7 +1368,7 @@ class BaseBot:
 
             if symbol_info['position_open']:
                 # Chỉ kiểm tra thoát lệnh theo nến 15 phút (dùng logic mới)
-                self._check_candle_exit_15m(symbol)
+                self._check_candle_exit_1m(symbol)
                 return False
             else:
                 if (current_time - symbol_info['last_trade_time'] > 30 and
@@ -1506,7 +1506,7 @@ class BaseBot:
                     return False
 
                 # Kiểm tra tín hiệu nến 15 phút ngay trước khi vào lệnh (dùng logic mới)
-                local_signal = get_candle_signal_15m(symbol)
+                local_signal = get_candle_signal_1m(symbol)
                 if local_signal is None or local_signal != side:
                     self.log(f"⚠️ {symbol} tín hiệu nến không còn phù hợp ({local_signal} vs {side})")
                     if hasattr(self, '_bot_manager') and self._bot_manager:
@@ -1623,7 +1623,7 @@ class BaseBot:
                                f"🏷️ Entry: {self.symbol_data[symbol]['entry']:.4f}\n"
                                f"📊 Khối lượng: {abs(self.symbol_data[symbol]['qty']):.4f}\n"
                                f"💰 Đòn bẩy: {self.lev}x\n"
-                               f"🎯 Thoát: Khi nến 15m (volume+body) ngược hướng")
+                               f"🎯 Thoát: Khi nến 1m (volume+body) ngược hướng")
                     self.log(message)
                     return True
                 else:
@@ -1638,7 +1638,7 @@ class BaseBot:
                 return False
 
     # ---------- THOÁT LỆNH THEO NẾN 15 PHÚT (DÙNG LOGIC MỚI) ----------
-    def _check_candle_exit_15m(self, symbol):
+    def _check_candle_exit_1m(self, symbol):
         """Kiểm tra nến 15 phút vừa đóng: nếu tín hiệu (dựa trên volume+body) ngược hướng thì đóng lệnh"""
         if symbol not in self.symbol_data:
             return False
@@ -1648,7 +1648,7 @@ class BaseBot:
 
         try:
             url = "https://fapi.binance.com/fapi/v1/klines"
-            params = {"symbol": symbol.upper(), "interval": "15m", "limit": 1}
+            params = {"symbol": symbol.upper(), "interval": "1m", "limit": 1}
             kline_data = binance_api_request(url, params=params)
             if not kline_data or len(kline_data) == 0:
                 return False
@@ -1664,7 +1664,7 @@ class BaseBot:
             self.last_candle_check[symbol] = close_time_sec
 
             # Lấy 2 nến gần nhất để tính tín hiệu (prev và curr)
-            params2 = {"symbol": symbol.upper(), "interval": "15m", "limit": 2}
+            params2 = {"symbol": symbol.upper(), "interval": "1m", "limit": 2}
             klines = binance_api_request(url, params=params2)
             if not klines or len(klines) < 2:
                 return False
@@ -1678,15 +1678,15 @@ class BaseBot:
 
             current_side = data['side']
             if signal != current_side:
-                self.log(f"🕯️ {symbol} - Nến 15m đóng ngược hướng (tín hiệu {signal} vs {current_side}), đóng lệnh")
-                if self._close_symbol_position(symbol, reason="(Candle 15m opposite)"):
-                    self._blacklist_and_stop_symbol(symbol, reason="Candle 15m opposite")
+                self.log(f"🕯️ {symbol} - Nến 1m đóng ngược hướng (tín hiệu {signal} vs {current_side}), đóng lệnh")
+                if self._close_symbol_position(symbol, reason="(Candle 1m opposite)"):
+                    self._blacklist_and_stop_symbol(symbol, reason="Candle 1m opposite")
                 return True
             else:
-                self.log(f"🕯️ {symbol} - Nến 15m đóng cùng hướng (tín hiệu {signal} vs {current_side}), giữ lệnh")
+                self.log(f"🕯️ {symbol} - Nến 1m đóng cùng hướng (tín hiệu {signal} vs {current_side}), giữ lệnh")
                 return False
         except Exception as e:
-            logger.error(f"Lỗi kiểm tra nến thoát 15m {symbol}: {e}")
+            logger.error(f"Lỗi kiểm tra nến thoát 1m {symbol}: {e}")
             return False
 
     # ---------- ĐÓNG LỆNH ----------
@@ -2107,7 +2107,7 @@ class BotManager:
             if bot_mode == 'static' and symbol:
                 success_msg += f"🔗 Coin ban đầu: {symbol}\n"
             else:
-                success_msg += f"🔗 Coin: Tự động tìm (USDT/USDC) - dùng tín hiệu 2 nến 15m (volume+body)\n"
+                success_msg += f"🔗 Coin: Tự động tìm (USDT/USDC) - dùng tín hiệu 2 nến 1m (volume+body)\n"
             success_msg += balance_info
             self.log(success_msg)
             return True
@@ -2628,7 +2628,7 @@ class BotManager:
             min_volume_sell = user_state.get('min_volume_sell', 0.0)
 
             success = self.add_bot(
-                symbol=symbol, lev=leverage, percent=percent, strategy_type="15mCandleSignal",
+                symbol=symbol, lev=leverage, percent=percent, strategy_type="1mCandleSignal",
                 bot_mode=bot_mode, bot_count=bot_count,
                 enable_balance_orders=enable_balance_orders,
                 max_price_buy=max_price_buy, max_volume_buy=max_volume_buy,
@@ -2643,10 +2643,10 @@ class BotManager:
                                    f"\n📉 BÁN: giá ≥ {min_price_sell} USDT, vol ≥ {min_volume_sell}")
 
                 success_msg = (f"✅ <b>ĐÃ TẠO BOT TÍN HIỆU 2 NẾN 15 PHÚT (VOLUME+BODY) THÀNH CÔNG</b>\n\n"
-                               f"🤖 Chiến lược: 15m Candle Signal\n🔧 Chế độ: {bot_mode}\n"
+                               f"🤖 Chiến lược: 1m Candle Signal\n🔧 Chế độ: {bot_mode}\n"
                                f"🔢 Số bot: {bot_count}\n💰 Đòn bẩy: {leverage}x\n"
                                f"📊 % Số dư: {percent}%\n"
-                               f"🎯 Thoát: Khi nến 15m (volume+body) ngược hướng{balance_info}{filter_info}")
+                               f"🎯 Thoát: Khi nến 1m (volume+body) ngược hướng{balance_info}{filter_info}")
                 if bot_mode == 'static' and symbol:
                     success_msg += f"\n🔗 Coin: {symbol}"
 
