@@ -1,10 +1,11 @@
-# trading_bot_reversal.py
+# trading_bot_final.py
 # =============================================================================
-#  BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 1 PHÚT (VOLUME + BODY)
-#  - Vào lệnh dựa trên tín hiệu nến hiện tại.
-#  - Thoát lệnh khi nến mới đóng có tín hiệu ngược hướng → đóng và đảo chiều.
+#  BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 1M (VOLUME + BODY)
+#  CẢI TIẾN: DÙNG WEBSOCKET NHẬN NẾN REAL-TIME, ĐẢO CHIỀU NGAY LẬP TỨC
+#  - Vào lệnh dựa trên tín hiệu nến hiện tại (real-time).
+#  - Thoát lệnh khi nến mới đóng có tín hiệu ngược hướng → đóng và đảo chiều ngay.
 #  - Hỗ trợ TP/SL (ROI sau đòn bẩy). Nếu đặt cả TP và SL, khi chạm TP/SL sẽ đổi coin khác.
-#  - Không sử dụng cân bằng lệnh toàn cục, không pyramiding, không ROI trigger.
+#  - Không sử dụng cân bằng lệnh toàn cục, không pyramiding.
 # =============================================================================
 
 import json
@@ -36,7 +37,7 @@ _BINANCE_LAST_REQUEST_TIME = 0
 _BINANCE_RATE_LOCK = threading.RLock()
 _BINANCE_MIN_INTERVAL = 0.2
 
-_SYMBOL_BLACKLIST = {'BTCUSDT', 'BTCUSDC','ETHUSDT','ETHUSDC'}
+_SYMBOL_BLACKLIST = {'BTCUSDT', 'BTCUSDC', 'ETHUSDT', 'ETHUSDC'}
 
 # ========== CACHE COIN TẬP TRUNG ==========
 class CoinCache:
@@ -789,7 +790,7 @@ def get_mark_price(symbol):
     _mark_price_time[symbol] = now
     return price
 
-# ========== HÀM PHÂN TÍCH TÍN HIỆU DỰA TRÊN 2 NẾN 1 PHÚT ==========
+# ========== HÀM PHÂN TÍCH TÍN HIỆU TỪ NẾN (REAL-TIME) ==========
 def compute_signal_from_candles(prev_candle, curr_candle):
     """
     Tín hiệu kết hợp volume + chiều dài nến.
@@ -815,19 +816,135 @@ def compute_signal_from_candles(prev_candle, curr_candle):
         logger.error(f"Lỗi tính tín hiệu từ nến: {e}")
         return None
 
-def get_candle_signal_1m(symbol):
-    try:
-        url = "https://fapi.binance.com/fapi/v1/klines"
-        params = {"symbol": symbol.upper(), "interval": "1m", "limit": 2}
-        data = binance_api_request(url, params=params)
-        if not data or len(data) < 2:
+# ========== QUẢN LÝ NẾN REAL-TIME QUA WEBSOCKET ==========
+class RealtimeCandleManager:
+    """Nhận nến 1m real-time từ Binance WebSocket, lưu trữ và cung cấp tín hiệu."""
+    def __init__(self):
+        self._candles = {}  # symbol -> {'prev': candle, 'curr': candle, 'last_close_time': timestamp}
+        self._lock = threading.RLock()
+        self._ws_connections = {}  # symbol -> websocket app
+        self._stop_event = threading.Event()
+        self._executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix='candle_ws')
+        self._subscribers = defaultdict(list)  # symbol -> list of callbacks
+
+    def subscribe(self, symbol, callback):
+        """Đăng ký nhận tín hiệu real-time cho symbol."""
+        symbol = symbol.upper()
+        with self._lock:
+            if symbol not in self._subscribers:
+                self._subscribers[symbol] = []
+            self._subscribers[symbol].append(callback)
+            if symbol not in self._ws_connections:
+                self._start_websocket(symbol)
+
+    def unsubscribe(self, symbol, callback=None):
+        symbol = symbol.upper()
+        with self._lock:
+            if callback is None:
+                self._subscribers.pop(symbol, None)
+            elif symbol in self._subscribers:
+                try:
+                    self._subscribers[symbol].remove(callback)
+                except ValueError:
+                    pass
+            if symbol in self._subscribers and not self._subscribers[symbol]:
+                self._stop_websocket(symbol)
+
+    def _start_websocket(self, symbol):
+        stream_url = f"wss://fstream.binance.com/ws/{symbol.lower()}@kline_1m"
+        ws = websocket.WebSocketApp(stream_url,
+                                    on_message=lambda ws, msg: self._on_message(symbol, msg),
+                                    on_error=lambda ws, err: self._on_error(symbol, err),
+                                    on_close=lambda ws, code, msg: self._on_close(symbol, code, msg))
+        thread = threading.Thread(target=ws.run_forever, daemon=True, name=f"candle-{symbol}")
+        thread.start()
+        self._ws_connections[symbol] = ws
+        logger.info(f"🕯️ WebSocket nến 1m đã kết nối cho {symbol}")
+
+    def _stop_websocket(self, symbol):
+        ws = self._ws_connections.pop(symbol, None)
+        if ws:
+            ws.close()
+        logger.info(f"🕯️ Đã ngắt WebSocket nến 1m cho {symbol}")
+
+    def _on_message(self, symbol, message):
+        try:
+            data = json.loads(message)
+            kline = data['k']
+            if not kline['x']:  # chỉ xử lý khi nến đóng
+                return
+            # Lấy dữ liệu nến đã đóng
+            candle = [
+                kline['t'],  # open time
+                float(kline['o']),
+                float(kline['h']),
+                float(kline['l']),
+                float(kline['c']),
+                float(kline['v']),
+                kline['T']   # close time
+            ]
+            with self._lock:
+                old = self._candles.get(symbol, {})
+                # Dịch chuyển: curr thành prev, nhận nến mới làm curr
+                prev_candle = old.get('curr')
+                curr_candle = candle
+                self._candles[symbol] = {
+                    'prev': prev_candle,
+                    'curr': curr_candle,
+                    'last_close_time': kline['T'] / 1000.0
+                }
+                # Tính tín hiệu nếu có đủ 2 nến
+                signal = None
+                if prev_candle is not None:
+                    signal = compute_signal_from_candles(prev_candle, curr_candle)
+                # Gọi các callback
+                for cb in self._subscribers.get(symbol, []):
+                    self._executor.submit(cb, signal)
+        except Exception as e:
+            logger.error(f"Lỗi xử lý nến WebSocket {symbol}: {e}")
+
+    def _on_error(self, symbol, error):
+        logger.error(f"WebSocket nến lỗi {symbol}: {error}")
+        # Tự động reconnect sau 5 giây
+        time.sleep(5)
+        with self._lock:
+            if symbol in self._ws_connections:
+                self._start_websocket(symbol)
+
+    def _on_close(self, symbol, code, msg):
+        logger.info(f"WebSocket nến đóng {symbol}: {code} {msg}")
+        with self._lock:
+            if symbol in self._ws_connections:
+                del self._ws_connections[symbol]
+        # Thử reconnect
+        time.sleep(5)
+        with self._lock:
+            if symbol in self._subscribers and self._subscribers[symbol]:
+                self._start_websocket(symbol)
+
+    def get_current_signal(self, symbol):
+        """Lấy tín hiệu từ nến gần nhất đã đóng (nếu có). Trả về None nếu chưa đủ dữ liệu."""
+        symbol = symbol.upper()
+        with self._lock:
+            data = self._candles.get(symbol)
+            if data and data.get('prev') and data.get('curr'):
+                return compute_signal_from_candles(data['prev'], data['curr'])
             return None
-        prev = data[0]
-        curr = data[1]
-        return compute_signal_from_candles(prev, curr)
-    except Exception as e:
-        logger.error(f"Lỗi phân tích tín hiệu nến 1m {symbol}: {e}")
-        return None
+
+    def stop(self):
+        self._stop_event.set()
+        for sym in list(self._ws_connections.keys()):
+            self._stop_websocket(sym)
+        self._executor.shutdown(wait=False)
+
+# Singleton
+_candle_manager = None
+
+def get_candle_manager():
+    global _candle_manager
+    if _candle_manager is None:
+        _candle_manager = RealtimeCandleManager()
+    return _candle_manager
 
 # ========== HÀM KIỂM TRA VỊ THẾ ==========
 def get_positions(symbol=None, api_key=None, api_secret=None):
@@ -999,7 +1116,7 @@ class SmartCoinFinder:
         self._bot_manager = bot_manager
 
     def find_best_coin_with_balance(self, excluded_coins=None):
-        """Tìm coin dựa trên tín hiệu nến riêng (không dùng global side)"""
+        """Tìm coin dựa trên tín hiệu nến real-time (không dùng REST)"""
         try:
             now = time.time()
             if now - self.last_scan_time < self.scan_cooldown:
@@ -1011,7 +1128,7 @@ class SmartCoinFinder:
                 logger.warning("⚠️ Cache coin trống, không thể tìm coin.")
                 return None
 
-            # Duyệt tất cả coin, lấy tín hiệu nến
+            # Duyệt tất cả coin, lấy tín hiệu từ WebSocket real-time
             for coin in coins:
                 symbol = coin['symbol']
                 if symbol in _SYMBOL_BLACKLIST:
@@ -1025,14 +1142,16 @@ class SmartCoinFinder:
                 if self._bot_manager and self._bot_manager.coin_manager.is_coin_active(symbol):
                     continue
 
-                local_signal = get_candle_signal_1m(symbol)
-                if local_signal is None:
+                # Lấy tín hiệu real-time từ candle manager
+                candle_mgr = get_candle_manager()
+                signal = candle_mgr.get_current_signal(symbol)
+                if signal is None:
                     continue
 
                 # Kiểm tra bộ lọc giá/volume
-                filtered = filter_coins_for_side(local_signal, excluded_coins)
+                filtered = filter_coins_for_side(signal, excluded_coins)
                 if any(c['symbol'] == symbol for c in filtered):
-                    logger.info(f"✅ Tìm thấy coin {symbol} với tín hiệu {local_signal} | volume: {coin['volume']:.2f}")
+                    logger.info(f"✅ Tìm thấy coin {symbol} với tín hiệu {signal} (real-time) | volume: {coin['volume']:.2f}")
                     return symbol
 
             return None
@@ -1042,7 +1161,7 @@ class SmartCoinFinder:
             logger.error(traceback.format_exc())
             return None
 
-# ========== WEBSOCKET MANAGER ==========
+# ========== WEBSOCKET MANAGER CHO GIÁ (trade) ==========
 class WebSocketManager:
     def __init__(self):
         self.connections = {}
@@ -1096,10 +1215,10 @@ class WebSocketManager:
         thread = threading.Thread(target=ws.run_forever, daemon=True, name=f"ws-{symbol}")
         thread.start()
         self.connections[symbol] = {'ws': ws, 'thread': thread, 'callback': callback}
-        logger.info(f"🔗 WebSocket đã khởi động cho {symbol}")
+        logger.info(f"🔗 WebSocket giá đã khởi động cho {symbol}")
 
     def _reconnect(self, symbol, callback):
-        logger.info(f"Đang kết nối lại WebSocket cho {symbol}")
+        logger.info(f"Đang kết nối lại WebSocket giá cho {symbol}")
         self.remove_symbol(symbol)
         self._create_connection(symbol, callback)
 
@@ -1116,7 +1235,7 @@ class WebSocketManager:
                 del self.connections[symbol]
                 self.price_cache.pop(symbol, None)
                 self.last_price_update.pop(symbol, None)
-                logger.info(f"WebSocket đã xóa cho {symbol}")
+                logger.info(f"WebSocket giá đã xóa cho {symbol}")
 
     def stop(self):
         self._stop_event.set()
@@ -1124,7 +1243,7 @@ class WebSocketManager:
             self.remove_symbol(symbol)
         self.executor.shutdown(wait=False)
 
-# ========== LỚP BaseBot (ĐÃ SỬA: BỎ GLOBAL BALANCE, THÊM TP/SL, ĐẢO CHIỀU) ==========
+# ========== LỚP BaseBot (CẢI TIẾN VỚI WEBSOCKET NẾN REAL-TIME) ==========
 class BaseBot:
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret,
                  telegram_bot_token, telegram_chat_id, strategy_name, config_key=None, bot_id=None,
@@ -1194,8 +1313,10 @@ class BaseBot:
         self.consecutive_failures = 0
         self.failure_cooldown_until = 0
 
-        # Theo dõi nến 1m đã xử lý
-        self.last_candle_check = {}
+        # Sử dụng WebSocket nến real-time
+        self.candle_manager = get_candle_manager()
+        self._candle_signal = None  # tín hiệu mới nhất
+        self._candle_signal_time = 0
 
         # Biến hỗ trợ đảo chiều
         self._pending_reverse = False
@@ -1210,7 +1331,16 @@ class BaseBot:
 
         tp_sl_info = f" | TP: {self.tp}%" if self.tp else " | TP: Tắt"
         tp_sl_info += f" | SL: {self.sl}%" if self.sl else " | SL: Tắt"
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: 2 nến 1m (volume+body) | Đảo chiều khi tín hiệu ngược{tp_sl_info}")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: 2 nến 1m (volume+body) REAL-TIME | Đảo chiều khi tín hiệu ngược{tp_sl_info}")
+
+    def _on_candle_signal(self, symbol, signal):
+        """Callback khi có nến 1m mới đóng và tín hiệu được tính."""
+        if symbol not in self.active_symbols:
+            return
+        if signal is not None:
+            self._candle_signal = signal
+            self._candle_signal_time = time.time()
+            self.log(f"🕯️ {symbol} - Tín hiệu nến real-time: {signal}")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1293,7 +1423,7 @@ class BaseBot:
                             self.log(f"🔄 Đã chuyển quyền tìm coin cho bot: {next_bot}")
                         break
 
-                time.sleep(1)
+                time.sleep(0.5)  # Giảm sleep để phản ứng nhanh với tín hiệu real-time
 
             except Exception as e:
                 if time.time() - self.last_error_log_time > 10:
@@ -1321,19 +1451,26 @@ class BaseBot:
             if symbol_info['position_open']:
                 # Kiểm tra TP/SL trước
                 self._check_symbol_tp_sl(symbol)
-                # Kiểm tra tín hiệu nến thoát (đảo chiều)
-                self._check_candle_exit_1m(symbol)
+                # Kiểm tra tín hiệu nến thoát (đảo chiều) - dùng real-time signal
+                if self._candle_signal is not None and (current_time - self._candle_signal_time < 5):
+                    current_side = symbol_info['side']
+                    if self._candle_signal != current_side:
+                        self.log(f"🕯️ {symbol} - Tín hiệu nến real-time ngược hướng ({self._candle_signal} vs {current_side}), đóng lệnh và đảo chiều")
+                        self._close_symbol_position(symbol, reason="Candle opposite")
                 return False
             else:
-                # Nếu đang chờ đảo chiều thì không xử lý ở đây (đã có vòng lặp riêng)
+                # Nếu đang chờ đảo chiều thì không xử lý ở đây
                 if self._pending_reverse and self._reverse_symbol == symbol:
                     return False
 
-                # Cooldown: nếu vừa đóng lệnh do đảo chiều thì đã được xử lý riêng, ở đây bỏ qua cooldown
+                # Cooldown sau khi đóng lệnh
                 if (current_time - symbol_info['last_trade_time'] > 30 and
                     current_time - symbol_info['last_close_time'] > 30):
-                    # Lấy tín hiệu nến hiện tại để quyết định hướng mở
-                    signal = get_candle_signal_1m(symbol)
+                    # Lấy tín hiệu real-time để quyết định hướng mở
+                    signal = self._candle_signal if (current_time - self._candle_signal_time < 5) else None
+                    if signal is None:
+                        # Thử lấy từ cache manager
+                        signal = self.candle_manager.get_current_signal(symbol)
                     if signal is None:
                         self.log(f"⚠️ {symbol} không có tín hiệu rõ ràng, dừng coin")
                         self.stop_symbol(symbol, failed=True)
@@ -1373,9 +1510,12 @@ class BaseBot:
             'failed_attempts': 0,
             'added_time': time.time()
         }
+        # Đăng ký nhận giá real-time
         self.ws_manager.add_symbol(symbol, lambda p, s=symbol: self._handle_price_update(s, p))
+        # Đăng ký nhận tín hiệu nến real-time
+        self.candle_manager.subscribe(symbol, lambda sig, s=symbol: self._on_candle_signal(s, sig))
         self.coin_manager.register_coin(symbol)
-        self.log(f"➕ Đã thêm {symbol} vào theo dõi")
+        self.log(f"➕ Đã thêm {symbol} vào theo dõi (real-time candles)")
 
     def _handle_price_update(self, symbol, price):
         if symbol not in self.symbol_data:
@@ -1455,7 +1595,6 @@ class BaseBot:
                 'status': 'closed',
             })
             self.symbol_data[symbol]['last_close_time'] = time.time()
-            self.last_candle_check.pop(symbol, None)
 
     # ---------- TP/SL (dùng mark price, tính ROI sau đòn bẩy) ----------
     def _check_symbol_tp_sl(self, symbol):
@@ -1498,54 +1637,6 @@ class BaseBot:
             self.log(f"🛡️ {symbol} - Đạt SL {self.sl}%, đóng lệnh")
             self._close_symbol_position(symbol, reason=f"SL {self.sl}%")
             return
-
-    # ---------- THOÁT LỆNH THEO NẾN 1M (TÍN HIỆU NGƯỢC) ----------
-    def _check_candle_exit_1m(self, symbol):
-        if symbol not in self.symbol_data:
-            return False
-        data = self.symbol_data[symbol]
-        if not data['position_open']:
-            return False
-
-        try:
-            url = "https://fapi.binance.com/fapi/v1/klines"
-            params = {"symbol": symbol.upper(), "interval": "1m", "limit": 1}
-            kline_data = binance_api_request(url, params=params)
-            if not kline_data or len(kline_data) == 0:
-                return False
-            curr_candle = kline_data[0]
-            close_time = curr_candle[6]
-            close_time_sec = close_time / 1000.0
-
-            last = self.last_candle_check.get(symbol, 0)
-            if close_time_sec <= last:
-                return False
-
-            self.last_candle_check[symbol] = close_time_sec
-
-            # Lấy 2 nến gần nhất để tính tín hiệu
-            params2 = {"symbol": symbol.upper(), "interval": "1m", "limit": 2}
-            klines = binance_api_request(url, params=params2)
-            if not klines or len(klines) < 2:
-                return False
-            prev = klines[0]
-            curr = klines[1]
-
-            signal = compute_signal_from_candles(prev, curr)
-            if signal is None:
-                return False
-
-            current_side = data['side']
-            if signal != current_side:
-                self.log(f"🕯️ {symbol} - Nến 1m đóng ngược hướng (tín hiệu {signal} vs {current_side}), đóng lệnh và chuẩn bị đảo chiều")
-                self._close_symbol_position(symbol, reason="Candle opposite")
-                return True
-            else:
-                self.log(f"🕯️ {symbol} - Nến 1m đóng cùng hướng (tín hiệu {signal} vs {current_side}), giữ lệnh")
-                return False
-        except Exception as e:
-            logger.error(f"Lỗi kiểm tra nến thoát 1m {symbol}: {e}")
-            return False
 
     # ---------- ĐÓNG LỆNH (XỬ LÝ ĐẢO CHIỀU/ĐỔI COIN) ----------
     def _close_symbol_position(self, symbol, reason=""):
@@ -1621,7 +1712,7 @@ class BaseBot:
         self.log(f"⛔ {symbol} đã bị blacklist 5 phút do {reason}")
         self.stop_symbol(symbol, failed=False)
 
-    # ---------- MỞ LỆNH (GIỮ NGUYÊN LOGIC CŨ, THÊM KIỂM TRA TÍN HIỆU) ----------
+    # ---------- MỞ LỆNH (KIỂM TRA TÍN HIỆU REAL-TIME) ----------
     def _open_symbol_position(self, symbol, side):
         with self.symbol_locks[symbol]:
             try:
@@ -1630,10 +1721,10 @@ class BaseBot:
                     self.stop_symbol(symbol, failed=True)
                     return False
 
-                # Kiểm tra tín hiệu nến ngay trước khi vào lệnh
-                local_signal = get_candle_signal_1m(symbol)
+                # Kiểm tra tín hiệu nến real-time ngay trước khi vào lệnh
+                local_signal = self.candle_manager.get_current_signal(symbol)
                 if local_signal is None or local_signal != side:
-                    self.log(f"⚠️ {symbol} tín hiệu nến không còn phù hợp ({local_signal} vs {side})")
+                    self.log(f"⚠️ {symbol} tín hiệu nến real-time không còn phù hợp ({local_signal} vs {side})")
                     if hasattr(self, '_bot_manager') and self._bot_manager:
                         self._bot_manager.bot_coordinator.add_temp_blacklist(symbol, duration=60)
                     self.stop_symbol(symbol, failed=True)
@@ -1735,8 +1826,6 @@ class BaseBot:
                         'last_trade_time': time.time(),
                     })
 
-                    self.last_candle_check[symbol] = 0
-
                     self.bot_coordinator.bot_has_coin(self.bot_id)
                     if hasattr(self, '_bot_manager') and self._bot_manager:
                         self._bot_manager.bot_coordinator.release_coin(symbol)
@@ -1793,6 +1882,7 @@ class BaseBot:
 
         try:
             self.ws_manager.remove_symbol(symbol)
+            self.candle_manager.unsubscribe(symbol, self._on_candle_signal)
         except Exception as e:
             self.log(f"❌ Lỗi dừng WebSocket {symbol}: {str(e)}")
 
@@ -1802,7 +1892,6 @@ class BaseBot:
             self.log(f"⚠️ {symbol} không có trong active_symbols khi dừng")
 
         self.coin_manager.unregister_coin(symbol)
-        self.last_candle_check.pop(symbol, None)
 
         if failed:
             if hasattr(self, '_bot_manager') and self._bot_manager:
@@ -1853,7 +1942,7 @@ class BaseBot:
 class GlobalMarketBot(BaseBot):
     pass
 
-# ========== BotManager (CẬP NHẬT LUỒNG TẠO BOT, THÊM TP/SL, BỎ GLOBAL BALANCE) ==========
+# ========== BotManager (CẬP NHẬT) ==========
 class BotManager:
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
         self.ws_manager = WebSocketManager()
@@ -1870,11 +1959,10 @@ class BotManager:
         self.bot_coordinator = BotExecutionCoordinator()
         self.coin_manager = CoinManager()
         self.symbol_locks = defaultdict(threading.RLock)
-        # Không còn global_side_coordinator
 
         if api_key and api_secret:
             self._verify_api_connection()
-            self.log("🟢 HỆ THỐNG BOT TÍN HIỆU 2 NẾN 1M (VOLUME+BODY) - ĐẢO CHIỀU KHI TÍN HIỆU NGƯỢC")
+            self.log("🟢 HỆ THỐNG BOT TÍN HIỆU 2 NẾN 1M (VOLUME+BODY) - REAL-TIME WEBSOCKET - ĐẢO CHIỀU NGAY LẬP TỨC")
             self._initialize_cache()
             self._cache_thread = threading.Thread(target=self._cache_updater, daemon=True, name='cache_updater')
             self._cache_thread.start()
@@ -1963,7 +2051,7 @@ class BotManager:
                     'balance_orders': "BẬT" if hasattr(bot, 'enable_balance_orders') and bot.enable_balance_orders else "TẮT",
                 })
 
-            summary = "📊 **THỐNG KÊ CHI TIẾT - BOT TÍN HIỆU 2 NẾN 1M (VOLUME+BODY)**\n\n"
+            summary = "📊 **THỐNG KÊ CHI TIẾT - BOT TÍN HIỆU 2 NẾN 1M (VOLUME+BODY) REAL-TIME**\n\n"
 
             cache_stats = _COINS_CACHE.get_stats()
             coins_in_cache = cache_stats['count']
@@ -2035,9 +2123,9 @@ class BotManager:
 
     def send_main_menu(self, chat_id):
         welcome = (
-            "🤖 <b>BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 1M (VOLUME + BODY)</b>\n\n"
+            "🤖 <b>BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 1M (VOLUME + BODY) REAL-TIME</b>\n\n"
             "🎯 <b>CƠ CHẾ HOẠT ĐỘNG:</b>\n"
-            "• Vào lệnh dựa trên tín hiệu nến 1m (volume + body).\n"
+            "• Vào lệnh dựa trên tín hiệu nến 1m (volume + body) từ WebSocket real-time.\n"
             "• Khi nến mới đóng và tín hiệu ngược hướng → đóng lệnh và ĐẢO CHIỀU ngay trên cùng coin.\n"
             "• Nếu đặt cả TP và SL, khi chạm TP hoặc SL sẽ đóng và chuyển sang coin khác.\n"
             "• Không sử dụng cân bằng lệnh toàn cục, không nhồi lệnh.\n\n"
@@ -2100,14 +2188,14 @@ class BotManager:
                 balance_info = (f"\n⚖️ <b>CÂN BẰNG LỆNH (LỌC COIN): BẬT</b>\n"
                                 f"• MUA: giá ≤ {max_price_buy} USDT, volume ≤ {max_volume_buy}\n"
                                 f"• BÁN: giá ≥ {min_price_sell} USDT, volume ≥ {min_volume_sell}\n")
-            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT TÍN HIỆU 2 NẾN 1M (VOLUME+BODY)</b>\n\n"
+            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT TÍN HIỆU 2 NẾN 1M (VOLUME+BODY) REAL-TIME</b>\n\n"
                            f"🎯 Chiến lược: {strategy_type}\n💰 Đòn bẩy: {lev}x\n"
                            f"📈 % Số dư: {percent}%\n{tp_info}\n{sl_info}\n"
                            f"🔧 Chế độ: {bot_mode}\n🔢 Số bot: {created_count}\n")
             if bot_mode == 'static' and symbol:
                 success_msg += f"🔗 Coin ban đầu: {symbol}\n"
             else:
-                success_msg += f"🔗 Coin: Tự động tìm theo tín hiệu nến (USDT/USDC)\n"
+                success_msg += f"🔗 Coin: Tự động tìm theo tín hiệu nến real-time (USDT/USDC)\n"
             success_msg += balance_info
             self.log(success_msg)
             return True
@@ -2321,7 +2409,7 @@ class BotManager:
             send_telegram("❌ Đã hủy thao tác.", chat_id=chat_id, reply_markup=create_main_menu(),
                          bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
 
-        # Luồng tạo bot (thêm TP, SL)
+        # Luồng tạo bot (giữ nguyên)
         elif current_step == 'waiting_bot_mode':
             if text == "🤖 Bot Tĩnh - Coin cụ thể":
                 user_state['bot_mode'] = 'static'
@@ -2414,7 +2502,6 @@ class BotManager:
         elif current_step == 'waiting_sl':
             if text == "❌ Bỏ qua (không SL)":
                 user_state['sl'] = None
-                # Kết thúc phần TP/SL
                 if user_state.get('bot_mode') == 'static':
                     self._finish_bot_creation(chat_id, user_state)
                 else:
@@ -2696,13 +2783,13 @@ class BotManager:
                     filter_info = (f"\n📈 MUA: giá ≤ {max_price_buy} USDT, vol ≤ {max_volume_buy}"
                                    f"\n📉 BÁN: giá ≥ {min_price_sell} USDT, vol ≥ {min_volume_sell}")
 
-                success_msg = (f"✅ <b>ĐÃ TẠO BOT ĐẢO CHIỀU THÀNH CÔNG</b>\n\n"
-                               f"🤖 Chiến lược: Tín hiệu 2 nến 1m (volume+body)\n🔧 Chế độ: {bot_mode}\n"
+                success_msg = (f"✅ <b>ĐÃ TẠO BOT ĐẢO CHIỀU REAL-TIME THÀNH CÔNG</b>\n\n"
+                               f"🤖 Chiến lược: Tín hiệu 2 nến 1m (volume+body) WebSocket\n🔧 Chế độ: {bot_mode}\n"
                                f"🔢 Số bot: {bot_count}\n💰 Đòn bẩy: {leverage}x\n"
                                f"📊 % Số dư: {percent}%\n"
                                f"🎯 TP: {tp}%" if tp else "🎯 TP: Tắt"
                                f" | 🛡️ SL: {sl}%" if sl else " | 🛡️ SL: Tắt"
-                               f"\n🔄 Đảo chiều khi tín hiệu nến ngược (nếu không có TP/SL đầy đủ)"
+                               f"\n🔄 Đảo chiều ngay lập tức khi tín hiệu nến ngược (nếu không có TP/SL đầy đủ)"
                                f"{balance_info}{filter_info}")
                 if bot_mode == 'static' and symbol:
                     success_msg += f"\n🔗 Coin: {symbol}"
