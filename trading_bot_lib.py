@@ -805,11 +805,17 @@ def compute_signal_from_candles(prev_candle, curr_candle):
         body_prev = abs(close_prev - open_prev)
         body_curr = abs(close_curr - open_curr)
 
-        if volume_curr > 3*volume_prev and body_curr > 2*body_prev:
+        if volume_prev > 2*volume_curr > volume_prev and body_prev > body_curr > body_prev:
             if close_curr > open_curr:
                 return "BUY"
             elif close_curr < open_curr:
                 return "SELL"
+
+        if volume_curr > 5*volume_prev and body_curr > 3*body_prev:
+            if close_curr > open_curr:
+                return "SELL"
+            elif close_curr < open_curr:
+                return "BUY"
         return None
     except Exception as e:
         logger.error(f"Lỗi tính tín hiệu từ nến: {e}")
