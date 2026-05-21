@@ -1276,7 +1276,11 @@ class BaseBot:
                 # Xử lý đảo chiều đang chờ
                 if self._pending_reverse and self._reverse_symbol in self.active_symbols:
                     self.log(f"🔄 Đang thực hiện đảo chiều trên {self._reverse_symbol} theo hướng {self._reverse_side}")
-                    if self._open_symbol_position(self._reverse_symbol, self._reverse_side):
+                    if self._open_symbol_position(
+                        self._reverse_symbol,
+                        self._reverse_side,
+                        skip_signal_check=True
+                    ):
                         self.log(f"✅ Đảo chiều thành công trên {self._reverse_symbol}")
                         self._pending_reverse = False
                         self._reverse_symbol = None
@@ -1628,7 +1632,7 @@ class BaseBot:
         self.stop_symbol(symbol, failed=False)
 
     # ---------- MỞ LỆNH (GIỮ NGUYÊN LOGIC CŨ, THÊM KIỂM TRA TÍN HIỆU) ----------
-    def _open_symbol_position(self, symbol, side):
+    def _open_symbol_position(self, symbol, side, skip_signal_check=False):
         with self.symbol_locks[symbol]:
             try:
                 if has_open_position(symbol, self.api_key, self.api_secret):
@@ -1637,13 +1641,15 @@ class BaseBot:
                     return False
 
                 # Kiểm tra tín hiệu nến ngay trước khi vào lệnh
-                local_signal = get_candle_signal_1m(symbol)
-                if local_signal is None or local_signal != side:
-                    self.log(f"⚠️ {symbol} tín hiệu nến không còn phù hợp ({local_signal} vs {side})")
-                    if hasattr(self, '_bot_manager') and self._bot_manager:
-                        self._bot_manager.bot_coordinator.add_temp_blacklist(symbol, duration=60)
-                    self.stop_symbol(symbol, failed=True)
-                    return False
+                # Chỉ kiểm tra lại tín hiệu khi KHÔNG PHẢI lệnh đảo chiều
+                if not skip_signal_check:
+                    local_signal = get_candle_signal_1m(symbol)
+                    if local_signal is None or local_signal != side:
+                        self.log(f"⚠️ {symbol} tín hiệu nến không còn phù hợp ({local_signal} vs {side})")
+                        if hasattr(self, '_bot_manager') and self._bot_manager:
+                            self._bot_manager.bot_coordinator.add_temp_blacklist(symbol, duration=60)
+                        self.stop_symbol(symbol, failed=True)
+                        return False
 
                 if not set_leverage(symbol, self.lev, self.api_key, self.api_secret):
                     self.log(f"❌ {symbol} - Không thể cài đặt đòn bẩy {self.lev}x")
