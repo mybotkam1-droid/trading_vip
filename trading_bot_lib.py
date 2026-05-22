@@ -1600,18 +1600,8 @@ class BaseBot:
                         self._reverse_side = reverse_side
                         self.log(f"🔄 Lên lịch đảo chiều {symbol} sang {reverse_side}")
                     elif "TP" in reason or "SL" in reason:
-                        # Kiểm tra xem có cả TP và SL hay không
-                        if self.tp is not None and self.sl is not None:
-                            # Cả hai đều được đặt → đổi coin khác
-                            self.log(f"⛔ {symbol} đóng do TP/SL với cả hai ngưỡng, sẽ tìm coin mới")
-                            self._blacklist_and_stop_symbol(symbol, reason=reason)
-                        else:
-                            # Thiếu một trong hai → vẫn đảo chiều
-                            reverse_side = "SELL" if side == "BUY" else "BUY"
-                            self._pending_reverse = True
-                            self._reverse_symbol = symbol
-                            self._reverse_side = reverse_side
-                            self.log(f"🔄 Lên lịch đảo chiều {symbol} sang {reverse_side} (TP/SL không đủ cả hai)")
+                        self.log(f"⛔ {symbol} đóng do TP/SL với cả hai ngưỡng, sẽ tìm coin mới")
+                        self._blacklist_and_stop_symbol(symbol, reason=reason)
                     else:
                         # Các lý do khác (stop by user, margin safety) → đổi coin
                         self._blacklist_and_stop_symbol(symbol, reason=reason)
