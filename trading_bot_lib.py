@@ -817,10 +817,11 @@ def compute_signal_from_candles(prev_candle, curr_candle):
                 return "SELL"
             elif close_curr < open_curr:
                 return "BUY"
+                '''
         return None
     except Exception as e:
         logger.error(f"Lỗi tính tín hiệu từ nến: {e}")
-        return None '''
+        return None
 
 def get_candle_signal_1m(symbol):
     try:
