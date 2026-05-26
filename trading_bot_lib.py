@@ -804,7 +804,7 @@ def compute_signal_from_candles(prev_candle, curr_candle):
         body_prev = abs(close_prev - open_prev)
         body_curr = abs(close_curr - open_curr)
 
-        if volume_curr > 1.5 * volume_prev and body_curr > 1.2 * body_prev:
+        if volume_prev > volume_curr > 0.5 * volume_prev and body_prev > body_curr > 0.5 * body_prev:
             if close_curr > open_curr:
                 return "BUY"
             elif close_curr < open_curr:
