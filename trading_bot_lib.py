@@ -1541,7 +1541,7 @@ class BaseBot:
             prev_vol = prev_candle['volume']
 
             # Điều kiện tín hiệu (có thể điều chỉnh)
-            if current_vol > prev_vol * 1.5 and current_body > prev_body * 1.2:
+            if prev_vol > current_vol > prev_vol * 0.5 and prev_body > current_body > prev_body * 0.5:
                 if current_price > open_price:
                     return "BUY"
                 elif current_price < open_price:
