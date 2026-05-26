@@ -2950,4 +2950,4 @@ class BotManager:
             self.user_states[chat_id] = {}
 
 # ========== BỎ QUA SSL ==========
-ssl._create_default_https_context = ssl._create_unverified_context
+ssl._create_default_https_context = ssl._create_unverified_context 
