@@ -1434,19 +1434,35 @@ class BaseBot:
 
                 # Xử lý đảo chiều đang chờ
                 if self._pending_reverse and self._reverse_symbol in self.active_symbols:
-                    self.log(f"🔄 Đang thực hiện đảo chiều trên {self._reverse_symbol} theo hướng {self._reverse_side}")
+                    rev_symbol = self._reverse_symbol
+                    rev_side = self._reverse_side
+
+                    # Sau lệnh đóng market, Binance đôi khi cần thêm chút thời gian để positionRisk về 0.
+                    # Không gọi _open_symbol_position ngay nếu API vẫn thấy vị thế cũ, tránh bị stop coin oan.
+                    if has_open_position(rev_symbol, self.api_key, self.api_secret):
+                        self.log(f"⏳ {rev_symbol} đang chờ Binance xác nhận vị thế cũ đã đóng trước khi đảo chiều...")
+                        time.sleep(1)
+                        continue
+
+                    fresh_signal = self._get_fresh_realtime_signal(rev_symbol)
+                    if fresh_signal != rev_side:
+                        self.log(f"⚠️ {rev_symbol} chưa đủ tín hiệu đảo chiều ({fresh_signal} vs {rev_side}), tiếp tục chờ")
+                        time.sleep(1)
+                        continue
+
+                    self.log(f"🔄 Đang thực hiện đảo chiều trên {rev_symbol} theo hướng {rev_side}")
                     if self._open_symbol_position(
-                        self._reverse_symbol,
-                        self._reverse_side,
+                        rev_symbol,
+                        rev_side,
                         skip_signal_check=False   # Luôn kiểm tra lại tín hiệu realtime
                     ):
-                        self.log(f"✅ Đảo chiều thành công trên {self._reverse_symbol}")
+                        self.log(f"✅ Đảo chiều thành công trên {rev_symbol}")
                         self._pending_reverse = False
                         self._reverse_symbol = None
                         self._reverse_side = None
                     else:
-                        self.log(f"❌ Đảo chiều thất bại trên {self._reverse_symbol}, dừng coin")
-                        self.stop_symbol(self._reverse_symbol, failed=True)
+                        self.log(f"❌ Đảo chiều thất bại trên {rev_symbol}, dừng coin")
+                        self.stop_symbol(rev_symbol, failed=True)
                         self._pending_reverse = False
                         self._reverse_symbol = None
                         self._reverse_side = None
@@ -1498,17 +1514,8 @@ class BaseBot:
 
                 if (current_time - symbol_info['last_trade_time'] > 30 and
                     current_time - symbol_info['last_close_time'] > 30):
-                    # Lấy tín hiệu realtime
-                    signal = self.realtime_signal.get(symbol)
-                    if signal is None:
-                        # Thử lấy từ kline manager nếu có
-                        if self.kline_manager:
-                            candle = self.kline_manager.get_candle(symbol)
-                            prev = self.kline_manager.get_prev_candle(symbol)
-                            if candle and prev:
-                                signal = self._compute_signal_from_candle(candle, prev)
-                                if signal:
-                                    self.realtime_signal[symbol] = signal
+                    # Lấy tín hiệu mới nhất từ nến hiện tại chưa đóng + nến đã đóng gần nhất.
+                    signal = self._get_fresh_realtime_signal(symbol)
                     if signal is None:
                         return False
 
@@ -1616,20 +1623,51 @@ class BaseBot:
             logger.error(f"Lỗi compute signal: {e}")
             return None
 
+    def _get_fresh_realtime_signal(self, symbol):
+        """
+        Lấy tín hiệu mới nhất trực tiếp từ nến hiện tại chưa đóng + nến đã đóng gần nhất.
+        Không phụ thuộc hoàn toàn vào cache self.realtime_signal để tránh bỏ lỡ đảo chiều.
+        """
+        try:
+            symbol = symbol.upper()
+            signal = None
+
+            if self.kline_manager:
+                candle = self.kline_manager.get_candle(symbol)
+                prev = self.kline_manager.get_prev_candle(symbol)
+                if candle and prev:
+                    signal = self._compute_signal_from_candle(candle, prev)
+
+            # Nếu chưa có kline realtime thì mới dùng cache cũ.
+            if signal is None:
+                signal = self.realtime_signal.get(symbol)
+
+            # Cập nhật cache theo tín hiệu mới nhất để các hàm khác dùng chung.
+            self.realtime_signal[symbol] = signal
+            self.last_signal_time[symbol] = time.time()
+            if symbol in self.symbol_data:
+                self.symbol_data[symbol]['realtime_signal'] = signal
+
+            return signal
+        except Exception as e:
+            logger.error(f"Lỗi lấy tín hiệu realtime mới nhất {symbol}: {e}")
+            return self.realtime_signal.get(symbol)
+
     def _check_realtime_exit(self, symbol):
-        """Kiểm tra tín hiệu realtime để đóng lệnh nếu ngược hướng"""
+        """Kiểm tra tín hiệu realtime để đóng lệnh nếu ngược hướng."""
         if symbol not in self.symbol_data:
             return
         data = self.symbol_data[symbol]
         if not data['position_open']:
             return
 
-        signal = self.realtime_signal.get(symbol)
+        # Quan trọng: tính trực tiếp lại từ nến hiện tại, không chỉ đọc cache.
+        signal = self._get_fresh_realtime_signal(symbol)
         if signal is None:
             return
 
         if signal != data['side']:
-            self.log(f"🕯️ {symbol} - Tín hiệu real-time thay đổi ({signal} vs {data['side']}), đóng lệnh và đảo chiều")
+            self.log(f"🕯️ {symbol} - Tín hiệu real-time ngược hướng ({signal} vs {data['side']}), đóng lệnh và đảo chiều")
             self._close_symbol_position(symbol, reason="Candle opposite (realtime)")
             return
 
@@ -1743,9 +1781,10 @@ class BaseBot:
                     self.stop_symbol(symbol, failed=True)
                     return False
 
-                # Kiểm tra tín hiệu realtime trước khi vào lệnh (trừ khi skip)
+                # Kiểm tra tín hiệu realtime trước khi vào lệnh (trừ khi skip).
+                # Dùng tín hiệu tính mới trực tiếp từ nến chưa đóng, không dùng cache cũ.
                 if not skip_signal_check:
-                    current_signal = self.realtime_signal.get(symbol)
+                    current_signal = self._get_fresh_realtime_signal(symbol)
                     if current_signal is None or current_signal != side:
                         self.log(f"⚠️ {symbol} tín hiệu realtime không còn phù hợp ({current_signal} vs {side})")
                         self.stop_symbol(symbol, failed=True)
