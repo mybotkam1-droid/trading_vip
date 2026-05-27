@@ -1221,20 +1221,31 @@ class RealtimeKlineManager:
                         'open': float(k['o']),
                         'high': float(k['h']),
                         'low': float(k['l']),
-                        'close': float(k['c']),      # giá hiện tại của nến chưa đóng
+                        'close': float(k['c']),      # giá hiện tại của nến chưa đóng, hoặc giá đóng khi x=True
                         'volume': float(k['v']),     # volume lũy kế tức thì của nến chưa đóng
                         'is_final': k['x'],
                         'time': k['t'],
-                        'close_time': k['T']
+                        'close_time': k['T'],
+                        'update_ts': time.time()
                     }
-                    # Lưu nến hiện tại. Khi x=False thì đây là nến đang chạy/chưa đóng.
-                    self.candle_data[symbol] = candle
+
+                    # Nếu đây là tick đóng nến, callback phải so với nến trước CŨ,
+                    # không được để prev = chính cây vừa đóng, nếu không signal sẽ luôn None.
                     if candle['is_final']:
-                        # Khi nến vừa đóng, nó trở thành nến trước cho nến kế tiếp.
-                        self.prev_candle_data[symbol] = candle.copy()
-                    # Gọi callback
+                        old_prev = self.prev_candle_data.get(symbol)
+                        candle['prev_for_signal'] = old_prev.copy() if old_prev else None
+                        self.candle_data.pop(symbol, None)
+                    else:
+                        # Khi x=False thì đây mới là nến hiện tại đang chạy/chưa đóng.
+                        self.candle_data[symbol] = candle
+
+                    # Gọi callback trước khi cập nhật prev để tránh mất tín hiệu ở tick đóng nến.
                     for cb in self.callbacks.get(symbol, []):
                         self.executor.submit(cb, symbol, candle)
+
+                    if candle['is_final']:
+                        # Sau khi bắn callback, cây vừa đóng trở thành prev cho cây kế tiếp.
+                        self.prev_candle_data[symbol] = candle.copy()
             except Exception as e:
                 logger.error(f"Lỗi kline WS {symbol}: {e}")
 
@@ -1361,6 +1372,7 @@ class BaseBot:
         self.realtime_signal = {}        # symbol -> 'BUY'/'SELL'/None
         self.last_signal_time = {}       # symbol -> timestamp
         self.signal_cache_ttl = 2        # giây
+        self.last_signal_debug_time = {}  # symbol -> timestamp, chống spam log debug tín hiệu
 
         # Biến hỗ trợ đảo chiều
         self._pending_reverse = False
@@ -1563,24 +1575,24 @@ class BaseBot:
         self.symbol_data[symbol]['last_price_time'] = time.time()
 
     def _on_kline_update(self, symbol, candle):
-        """Callback từ kline manager, cập nhật tín hiệu realtime theo nến chưa đóng."""
+        """Callback từ kline manager.
+        Chỉ cập nhật trạng thái tín hiệu mới nhất để xem/log.
+        Quyết định đóng/đảo chiều vẫn được tính lại trực tiếp trong _check_realtime_exit().
+        """
         if symbol not in self.symbol_data:
             return
 
-        # Nếu candle['is_final'] == False thì candle là nến hiện tại đang chạy.
-        # prev là nến đã đóng gần nhất đã được nạp từ REST hoặc cập nhật từ WS.
-        prev = self.kline_manager.get_prev_candle(symbol) if self.kline_manager else None
+        prev = candle.get('prev_for_signal') or (self.kline_manager.get_prev_candle(symbol) if self.kline_manager else None)
         if prev is None:
+            self.realtime_signal[symbol] = None
+            self.last_signal_time[symbol] = time.time()
+            self.symbol_data[symbol]['realtime_signal'] = None
             return
 
         signal = self._compute_signal_from_candle(candle, prev)
-        now = time.time()
-        if now - self.last_signal_time.get(symbol, 0) >= self.signal_cache_ttl:
-            self.realtime_signal[symbol] = signal
-            self.last_signal_time[symbol] = now
-            self.symbol_data[symbol]['realtime_signal'] = signal
-            # Log nếu cần debug:
-            # self.log(f"📡 {symbol} current={candle} prev={prev} signal={signal}")
+        self.realtime_signal[symbol] = signal
+        self.last_signal_time[symbol] = time.time()
+        self.symbol_data[symbol]['realtime_signal'] = signal
 
     def _compute_signal_from_candle(self, current_candle, prev_candle):
         """
@@ -1625,24 +1637,53 @@ class BaseBot:
 
     def _get_fresh_realtime_signal(self, symbol):
         """
-        Lấy tín hiệu mới nhất trực tiếp từ nến hiện tại chưa đóng + nến đã đóng gần nhất.
-        Không phụ thuộc hoàn toàn vào cache self.realtime_signal để tránh bỏ lỡ đảo chiều.
+        Tính tín hiệu MỚI ngay tại thời điểm kiểm tra.
+        Không dùng cache làm nguồn quyết định đóng/đảo chiều.
+
+        Nguồn dữ liệu:
+        1) Ưu tiên kline websocket hiện tại đang chạy + giá trade websocket mới nhất.
+        2) Nếu kline websocket thiếu/chậm thì fallback REST limit=2.
+
+        Cache self.realtime_signal chỉ được cập nhật lại sau khi tính xong để hiển thị/log,
+        không phải nguồn chính để quyết định đóng lệnh.
         """
         try:
             symbol = symbol.upper()
-            signal = None
+            candle = None
+            prev = None
 
+            # 1) Đọc nến hiện tại CHƯA ĐÓNG trực tiếp từ kline websocket.
             if self.kline_manager:
                 candle = self.kline_manager.get_candle(symbol)
                 prev = self.kline_manager.get_prev_candle(symbol)
-                if candle and prev:
-                    signal = self._compute_signal_from_candle(candle, prev)
 
-            # Nếu chưa có kline realtime thì mới dùng cache cũ.
-            if signal is None:
-                signal = self.realtime_signal.get(symbol)
+            # 2) Nếu dữ liệu websocket chưa đủ hoặc đã đứng quá lâu thì lấy REST limit=2.
+            # REST data[-1] của Binance là cây hiện tại đang chạy; close của cây này là giá tạm thời mới nhất.
+            now = time.time()
+            ws_stale = True
+            if candle and not candle.get('is_final', False):
+                update_ts = float(candle.get('update_ts', 0) or 0)
+                ws_stale = update_ts <= 0 or (now - update_ts) > 3
 
-            # Cập nhật cache theo tín hiệu mới nhất để các hàm khác dùng chung.
+            if (not candle) or (not prev) or ws_stale:
+                rest_candle, rest_prev = self._get_rest_current_and_prev_candle(symbol)
+                if rest_candle and rest_prev:
+                    candle, prev = rest_candle, rest_prev
+                    if self.kline_manager:
+                        self.kline_manager.candle_data[symbol] = rest_candle
+                        self.kline_manager.prev_candle_data[symbol] = rest_prev
+
+            # 3) Không có dữ liệu thì trả None, không đọc cache cũ.
+            if not candle or not prev:
+                self.realtime_signal[symbol] = None
+                self.last_signal_time[symbol] = time.time()
+                if symbol in self.symbol_data:
+                    self.symbol_data[symbol]['realtime_signal'] = None
+                return None
+
+            signal = self._compute_signal_from_candle(candle, prev)
+
+            # Cập nhật cache chỉ để xem/log, quyết định đã dựa trên dữ liệu live phía trên.
             self.realtime_signal[symbol] = signal
             self.last_signal_time[symbol] = time.time()
             if symbol in self.symbol_data:
@@ -1651,23 +1692,98 @@ class BaseBot:
             return signal
         except Exception as e:
             logger.error(f"Lỗi lấy tín hiệu realtime mới nhất {symbol}: {e}")
-            return self.realtime_signal.get(symbol)
+            return None
+
+    def _get_rest_current_and_prev_candle(self, symbol):
+        """REST fallback: data[-2] là nến đã đóng gần nhất, data[-1] là nến hiện tại chưa đóng."""
+        try:
+            url = "https://fapi.binance.com/fapi/v1/klines"
+            params = {"symbol": symbol.upper(), "interval": "1h", "limit": 2}
+            data = binance_api_request(url, params=params)
+            if not data or len(data) < 2:
+                return None, None
+
+            prev = data[-2]
+            curr = data[-1]
+            prev_candle = {
+                'symbol': symbol.upper(),
+                'open': float(prev[1]), 'high': float(prev[2]), 'low': float(prev[3]),
+                'close': float(prev[4]), 'volume': float(prev[5]),
+                'is_final': True, 'time': int(prev[0]), 'close_time': int(prev[6]),
+                'update_ts': time.time()
+            }
+            curr_candle = {
+                'symbol': symbol.upper(),
+                'open': float(curr[1]), 'high': float(curr[2]), 'low': float(curr[3]),
+                'close': float(curr[4]), # với nến chưa đóng, đây là giá hiện tại tạm thời
+                'volume': float(curr[5]),
+                'is_final': False, 'time': int(curr[0]), 'close_time': int(curr[6]),
+                'update_ts': time.time()
+            }
+            return curr_candle, prev_candle
+        except Exception as e:
+            logger.error(f"Lỗi REST fallback lấy nến {symbol}: {e}")
+            return None, None
+
+    def _debug_realtime_signal(self, symbol, current_side=None):
+        """Log nhanh lý do chưa có tín hiệu để kiểm tra volume/body thực tế bot đang thấy."""
+        try:
+            now = time.time()
+            if now - self.last_signal_debug_time.get(symbol, 0) < 5:
+                return
+            self.last_signal_debug_time[symbol] = now
+
+            candle = self.kline_manager.get_candle(symbol) if self.kline_manager else None
+            prev = self.kline_manager.get_prev_candle(symbol) if self.kline_manager else None
+            if not candle or not prev:
+                self.log(f"🔎 {symbol} chưa đủ dữ liệu kline để xét đảo chiều | candle={bool(candle)} prev={bool(prev)} side={current_side}")
+                return
+
+            open_curr = float(candle['open'])
+            price = float(self.symbol_data.get(symbol, {}).get('last_price', 0) or candle.get('close', 0) or 0)
+            body_curr = abs(price - open_curr)
+            body_prev = abs(float(prev['close']) - float(prev['open']))
+            vol_curr = float(candle['volume'])
+            vol_prev = float(prev['volume'])
+            direction = 'BUY' if price > open_curr else 'SELL' if price < open_curr else 'FLAT'
+            self.log(
+                f"🔎 {symbol} check đảo chiều | side={current_side} current_dir={direction} "
+                f"price={price:.6f} open={open_curr:.6f} "
+                f"body_now={body_curr:.6f} body_prev={body_prev:.6f} "
+                f"vol_now={vol_curr:.2f} vol_prev={vol_prev:.2f}"
+            )
+        except Exception as e:
+            logger.error(f"Lỗi debug signal {symbol}: {e}")
 
     def _check_realtime_exit(self, symbol):
-        """Kiểm tra tín hiệu realtime để đóng lệnh nếu ngược hướng."""
+        """
+        Kiểm tra tín hiệu LIVE để đóng lệnh nếu ngược hướng.
+        Điểm quan trọng: hàm này KHÔNG lấy quyết định từ self.realtime_signal cache nữa.
+        Mỗi lần chạy sẽ đọc lại nến hiện tại chưa đóng + nến đã đóng gần nhất.
+        """
         if symbol not in self.symbol_data:
             return
+
         data = self.symbol_data[symbol]
         if not data['position_open']:
             return
 
-        # Quan trọng: tính trực tiếp lại từ nến hiện tại, không chỉ đọc cache.
+        current_side = data.get('side')
+        if current_side not in ('BUY', 'SELL'):
+            return
+
         signal = self._get_fresh_realtime_signal(symbol)
+
+        # Luôn có log debug định kỳ để biết bot đang thấy gì, tránh im lặng.
+        self._debug_realtime_signal(symbol, current_side)
+
         if signal is None:
             return
 
-        if signal != data['side']:
-            self.log(f"🕯️ {symbol} - Tín hiệu real-time ngược hướng ({signal} vs {data['side']}), đóng lệnh và đảo chiều")
+        if signal != current_side:
+            self.log(
+                f"🕯️ {symbol} - Tín hiệu LIVE ngược hướng ({signal} vs {current_side}), đóng lệnh và đảo chiều"
+            )
             self._close_symbol_position(symbol, reason="Candle opposite (realtime)")
             return
 
@@ -2266,7 +2382,7 @@ class BotManager:
         welcome = (
             "🤖 <b>BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 1h REAL-TIME (VOLUME + BODY)</b>\n\n"
             "🎯 <b>CƠ CHẾ HOẠT ĐỘNG:</b>\n"
-            "• Tín hiệu được tính liên tục dựa trên nến 1h đang hình thành (dùng high/low, volume lũy kế).\n"
+            "• Tín hiệu được tính liên tục dựa trên nến 1h đang hình thành (thân nến = giá hiện tại - giá mở, volume lũy kế).\n"
             "• Khi tín hiệu ngược hướng với vị thế → đóng lệnh và ĐẢO CHIỀU ngay trên cùng coin.\n"
             "• Nếu đặt cả TP và SL, khi chạm TP hoặc SL sẽ đóng và chuyển sang coin khác.\n"
             "• Không sử dụng cân bằng lệnh toàn cục, không nhồi lệnh.\n\n"
@@ -2950,4 +3066,4 @@ class BotManager:
             self.user_states[chat_id] = {}
 
 # ========== BỎ QUA SSL ==========
-ssl._create_default_https_context = ssl._create_unverified_context 
+ssl._create_default_https_context = ssl._create_unverified_context
