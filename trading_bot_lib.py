@@ -1624,7 +1624,7 @@ class BaseBot:
             current_vol = float(current_candle['volume'])
             prev_vol = float(prev_candle['volume'])
 
-            if current_vol > prev_vol and current_body > prev_body:
+            if 1.618*current_vol > prev_vol and 1.618*current_body > prev_body:
                 if current_price > open_curr:
                     return "BUY"
                 elif current_price < open_curr:
@@ -1746,12 +1746,6 @@ class BaseBot:
             vol_curr = float(candle['volume'])
             vol_prev = float(prev['volume'])
             direction = 'BUY' if price > open_curr else 'SELL' if price < open_curr else 'FLAT'
-            self.log(
-                f"🔎 {symbol} check đảo chiều | side={current_side} current_dir={direction} "
-                f"price={price:.6f} open={open_curr:.6f} "
-                f"body_now={body_curr:.6f} body_prev={body_prev:.6f} "
-                f"vol_now={vol_curr:.2f} vol_prev={vol_prev:.2f}"
-            )
         except Exception as e:
             logger.error(f"Lỗi debug signal {symbol}: {e}")
 
