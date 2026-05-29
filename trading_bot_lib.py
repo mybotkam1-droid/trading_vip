@@ -811,7 +811,7 @@ def compute_signal_from_candles(prev_candle, curr_candle):
         body_prev = abs(close_prev - open_prev)
         body_curr = abs(close_curr - open_curr)  # thân nến tức thì: open -> giá hiện tại
 
-        if volume_curr > volume_prev and body_curr > body_prev:
+        if 1.618*volume_curr > volume_prev and 1.618*body_curr > body_prev:
             if close_curr > open_curr:
                 return "BUY"
             elif close_curr < open_curr:
@@ -1624,7 +1624,7 @@ class BaseBot:
             current_vol = float(current_candle['volume'])
             prev_vol = float(prev_candle['volume'])
 
-            if current_vol > prev_vol and current_body > prev_body:
+            if 1.618*current_vol > prev_vol and 1.618*current_body > prev_body:
                 if current_price > open_curr:
                     return "BUY"
                 elif current_price < open_curr:
