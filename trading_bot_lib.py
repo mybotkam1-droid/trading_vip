@@ -792,11 +792,9 @@ def get_mark_price(symbol):
 # ========== HÀM PHÂN TÍCH TÍN HIỆU (GIỮ TÊN CŨ ĐỂ TƯƠNG THÍCH) ==========
 def compute_signal_from_candles(prev_candle, curr_candle):
     """
-    Tính tín hiệu theo 2 nến dựa trên toàn bộ biên độ (high - low):
-    - prev_candle: nến đã đóng gần nhất.
-    - curr_candle: nến hiện tại đang chạy/chưa đóng.
-    Tín hiệu BUY/SELL khi range_curr * 1.618 > range_prev.
-    Hướng dựa vào close_curr so với open_curr.
+    Tính tín hiệu: body nến hiện tại so với toàn bộ biên độ nến trước.
+    prev_candle: nến đã đóng gần nhất.
+    curr_candle: nến hiện tại đang chạy/chưa đóng.
     """
     try:
         open_prev = float(prev_candle[1])
@@ -805,14 +803,12 @@ def compute_signal_from_candles(prev_candle, curr_candle):
         close_prev = float(prev_candle[4])
         
         open_curr = float(curr_candle[1])
-        high_curr = float(curr_candle[2])
-        low_curr = float(curr_candle[3])
-        close_curr = float(curr_candle[4])
+        close_curr = float(curr_candle[4])  # giá hiện tại của nến chưa đóng
         
+        body_curr = abs(close_curr - open_curr)
         range_prev = high_prev - low_prev
-        range_curr = high_curr - low_curr
         
-        if 1.618 * range_curr > range_prev:
+        if 1.618 * body_curr > range_prev:
             if close_curr > open_curr:
                 return "BUY"
             elif close_curr < open_curr:
@@ -821,7 +817,6 @@ def compute_signal_from_candles(prev_candle, curr_candle):
     except Exception as e:
         logger.error(f"Lỗi tính tín hiệu từ nến: {e}")
         return None
-
 def get_candle_signal_15m(symbol):
     """
     Fallback REST: lấy nến đã đóng gần nhất + nến hiện tại chưa đóng.
@@ -1596,14 +1591,12 @@ class BaseBot:
 
     def _compute_signal_from_candle(self, current_candle, prev_candle):
         """
-        current_candle = nến hiện tại CHƯA ĐÓNG.
-        prev_candle = nến đã đóng gần nhất.
-        Tín hiệu dựa trên toàn bộ biên độ (high - low) của mỗi nến.
+        Tín hiệu: body nến hiện tại so với toàn bộ biên độ nến trước.
+        current_candle: nến hiện tại CHƯA ĐÓNG.
+        prev_candle: nến đã đóng gần nhất.
         """
         try:
             open_curr = float(current_candle['open'])
-            high_curr = float(current_candle['high'])
-            low_curr = float(current_candle['low'])
             current_price = float(current_candle.get('close', 0))
             symbol = current_candle.get('symbol')
             
@@ -1616,10 +1609,10 @@ class BaseBot:
             if current_price <= 0:
                 return None
             
-            range_curr = high_curr - low_curr
+            body_curr = abs(current_price - open_curr)
             range_prev = float(prev_candle['high']) - float(prev_candle['low'])
             
-            if 1.618 * range_curr > range_prev:
+            if 1.618 * body_curr > range_prev:
                 if current_price > open_curr:
                     return "BUY"
                 elif current_price < open_curr:
@@ -1628,7 +1621,6 @@ class BaseBot:
         except Exception as e:
             logger.error(f"Lỗi compute signal: {e}")
             return None
-
     def _get_fresh_realtime_signal(self, symbol):
         """
         Tính tín hiệu MỚI ngay tại thời điểm kiểm tra.
