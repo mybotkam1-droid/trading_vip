@@ -792,31 +792,36 @@ def get_mark_price(symbol):
 # ========== HÀM PHÂN TÍCH TÍN HIỆU (GIỮ TÊN CŨ ĐỂ TƯƠNG THÍCH) ==========
 def compute_signal_from_candles(prev_candle, curr_candle):
     """
-    Tính tín hiệu: body nến hiện tại so với toàn bộ biên độ nến trước.
-    prev_candle: nến đã đóng gần nhất.
-    curr_candle: nến hiện tại đang chạy/chưa đóng.
+    Tính tín hiệu theo 2 nến:
+    - prev_candle: nến đã đóng gần nhất.
+    - curr_candle: nến hiện tại đang chạy/chưa đóng.
+
+    Lưu ý: với Binance kline REST/WebSocket, curr_candle[4] hoặc candle['close']
+    chính là giá hiện tại/tức thì của nến đang chạy, còn curr_candle[5]
+    là volume lũy kế tức thì của nến đang chạy.
     """
     try:
         open_prev = float(prev_candle[1])
-        high_prev = float(prev_candle[2])
-        low_prev = float(prev_candle[3])
         close_prev = float(prev_candle[4])
-        
         open_curr = float(curr_candle[1])
         close_curr = float(curr_candle[4])  # giá hiện tại của nến chưa đóng
-        
-        body_curr = abs(close_curr - open_curr)
-        range_prev = high_prev - low_prev
-        
-        if 1.618 * body_curr > range_prev:
+        volume_prev = float(prev_candle[5])
+        volume_curr = float(curr_candle[5]) # volume hiện tại/lũy kế của nến chưa đóng
+
+        body_prev = abs(close_prev - open_prev)
+        body_curr = abs(close_curr - open_curr)  # thân nến tức thì: open -> giá hiện tại
+
+        if 1.618*volume_curr > volume_prev:
             if close_curr > open_curr:
                 return "BUY"
             elif close_curr < open_curr:
                 return "SELL"
+
         return None
     except Exception as e:
         logger.error(f"Lỗi tính tín hiệu từ nến: {e}")
         return None
+
 def get_candle_signal_15m(symbol):
     """
     Fallback REST: lấy nến đã đóng gần nhất + nến hiện tại chưa đóng.
@@ -1591,36 +1596,45 @@ class BaseBot:
 
     def _compute_signal_from_candle(self, current_candle, prev_candle):
         """
-        Tín hiệu: body nến hiện tại so với toàn bộ biên độ nến trước.
-        current_candle: nến hiện tại CHƯA ĐÓNG.
-        prev_candle: nến đã đóng gần nhất.
+        current_candle = nến hiện tại CHƯA ĐÓNG.
+        - current_candle['close']: giá hiện tại/tức thì của nến đang chạy.
+        - current_candle['volume']: volume lũy kế tức thì của nến đang chạy.
+        - current_body = abs(giá hiện tại - open của nến hiện tại).
+
+        prev_candle = nến đã đóng gần nhất.
+        Tín hiệu chỉ có khi volume hiện tại > volume nến trước
+        và thân nến hiện tại > thân nến trước.
         """
         try:
             open_curr = float(current_candle['open'])
             current_price = float(current_candle.get('close', 0))
             symbol = current_candle.get('symbol')
-            
-            # Ưu tiên giá trade mới nhất nếu có
+
+            # Nếu stream trade có giá mới hơn kline close thì ưu tiên giá đó.
             if symbol and symbol in self.symbol_data:
                 last_price = float(self.symbol_data[symbol].get('last_price', 0) or 0)
                 if last_price > 0:
                     current_price = last_price
-            
+
             if current_price <= 0:
                 return None
-            
-            body_curr = abs(current_price - open_curr)
-            range_prev = float(prev_candle['high']) - float(prev_candle['low'])
-            
-            if 1.618 * body_curr > range_prev:
+
+            current_body = abs(current_price - open_curr)
+            prev_body = abs(float(prev_candle['close']) - float(prev_candle['open']))
+            current_vol = float(current_candle['volume'])
+            prev_vol = float(prev_candle['volume'])
+
+            if 1.618*current_vol > prev_vol:
                 if current_price > open_curr:
                     return "BUY"
                 elif current_price < open_curr:
                     return "SELL"
+
             return None
         except Exception as e:
             logger.error(f"Lỗi compute signal: {e}")
             return None
+
     def _get_fresh_realtime_signal(self, symbol):
         """
         Tính tín hiệu MỚI ngay tại thời điểm kiểm tra.
@@ -1681,14 +1695,14 @@ class BaseBot:
             return None
 
     def _get_rest_current_and_prev_candle(self, symbol):
-        """REST fallback: trả về nến hiện tại (chưa đóng) và nến trước (đã đóng) với đầy đủ high/low."""
+        """REST fallback: data[-2] là nến đã đóng gần nhất, data[-1] là nến hiện tại chưa đóng."""
         try:
             url = "https://fapi.binance.com/fapi/v1/klines"
             params = {"symbol": symbol.upper(), "interval": "15m", "limit": 2}
             data = binance_api_request(url, params=params)
             if not data or len(data) < 2:
                 return None, None
-            
+
             prev = data[-2]
             curr = data[-1]
             prev_candle = {
@@ -1701,7 +1715,8 @@ class BaseBot:
             curr_candle = {
                 'symbol': symbol.upper(),
                 'open': float(curr[1]), 'high': float(curr[2]), 'low': float(curr[3]),
-                'close': float(curr[4]), 'volume': float(curr[5]),
+                'close': float(curr[4]), # với nến chưa đóng, đây là giá hiện tại tạm thời
+                'volume': float(curr[5]),
                 'is_final': False, 'time': int(curr[0]), 'close_time': int(curr[6]),
                 'update_ts': time.time()
             }
@@ -1709,6 +1724,7 @@ class BaseBot:
         except Exception as e:
             logger.error(f"Lỗi REST fallback lấy nến {symbol}: {e}")
             return None, None
+
     def _debug_realtime_signal(self, symbol, current_side=None):
         """Log nhanh lý do chưa có tín hiệu để kiểm tra volume/body thực tế bot đang thấy."""
         try:
