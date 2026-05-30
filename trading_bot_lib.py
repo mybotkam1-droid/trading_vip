@@ -822,14 +822,14 @@ def compute_signal_from_candles(prev_candle, curr_candle):
         logger.error(f"Lỗi tính tín hiệu từ nến: {e}")
         return None
 
-def get_candle_signal_15m(symbol):
+def get_candle_signal_1h(symbol):
     """
     Fallback REST: lấy nến đã đóng gần nhất + nến hiện tại chưa đóng.
     Không dùng 2 nến đã đóng gần nhất.
     """
     try:
         url = "https://fapi.binance.com/fapi/v1/klines"
-        params = {"symbol": symbol.upper(), "interval": "15m", "limit": 2}
+        params = {"symbol": symbol.upper(), "interval": "1h", "limit": 2}
         data = binance_api_request(url, params=params)
         if not data or len(data) < 2:
             return None
@@ -838,7 +838,7 @@ def get_candle_signal_15m(symbol):
         curr = data[-1]  # nến hiện tại đang chạy/chưa đóng
         return compute_signal_from_candles(prev, curr)
     except Exception as e:
-        logger.error(f"Lỗi phân tích tín hiệu nến 15m {symbol}: {e}")
+        logger.error(f"Lỗi phân tích tín hiệu nến 1h {symbol}: {e}")
         return None
 
 # ========== HÀM KIỂM TRA VỊ THẾ ==========
@@ -1044,9 +1044,9 @@ class SmartCoinFinder:
                     candle = kline_mgr.get_candle(symbol)
                     prev_candle = None  # cần lưu prev? ta sẽ lấy từ cache riêng
                     # Đơn giản: dùng hàm fallback vì finder không có realtime sẵn
-                    signal = get_candle_signal_15m(symbol)
+                    signal = get_candle_signal_1h(symbol)
                 else:
-                    signal = get_candle_signal_15m(symbol)
+                    signal = get_candle_signal_1h(symbol)
 
                 if signal is None:
                     continue
@@ -1146,7 +1146,7 @@ class WebSocketManager:
             self.remove_symbol(symbol)
         self.executor.shutdown(wait=False)
 
-# ========== REALTIME KLINE MANAGER (15m) - MỚI ==========
+# ========== REALTIME KLINE MANAGER (1h) - MỚI ==========
 class RealtimeKlineManager:
     def __init__(self):
         self.connections = {}
@@ -1171,11 +1171,11 @@ class RealtimeKlineManager:
         Nạp sẵn 2 nến bằng REST:
         - data[-2]: nến đã đóng gần nhất
         - data[-1]: nến hiện tại chưa đóng, volume/thân nến đang chạy tức thì
-        Việc này giúp bot có prev_candle ngay khi vừa add coin, không phải chờ nến 15m đóng.
+        Việc này giúp bot có prev_candle ngay khi vừa add coin, không phải chờ nến 1h đóng.
         """
         try:
             url = "https://fapi.binance.com/fapi/v1/klines"
-            params = {"symbol": symbol.upper(), "interval": "15m", "limit": 2}
+            params = {"symbol": symbol.upper(), "interval": "1h", "limit": 2}
             data = binance_api_request(url, params=params)
             if not data or len(data) < 2:
                 return
@@ -1208,14 +1208,14 @@ class RealtimeKlineManager:
             logger.error(f"Lỗi nạp nến ban đầu {symbol}: {e}")
 
     def _connect(self, symbol):
-        stream = f"{symbol.lower()}@kline_15m"
+        stream = f"{symbol.lower()}@kline_1h"
         url = f"wss://fstream.binance.com/ws/{stream}"
 
         def on_message(ws, message):
             try:
                 data = json.loads(message)
                 k = data['k']
-                if k['i'] == '15m':
+                if k['i'] == '1h':
                     candle = {
                         'symbol': symbol,
                         'open': float(k['o']),
@@ -1265,7 +1265,7 @@ class RealtimeKlineManager:
         thread = threading.Thread(target=ws.run_forever, daemon=True, name=f"kline-{symbol}")
         thread.start()
         self.connections[symbol] = {'ws': ws, 'thread': thread}
-        logger.info(f"🔗 Kline WebSocket 15m cho {symbol}")
+        logger.info(f"🔗 Kline WebSocket 1h cho {symbol}")
 
     def _reconnect(self, symbol):
         self.remove_symbol(symbol)
@@ -1287,7 +1287,7 @@ class RealtimeKlineManager:
         return self.candle_data.get(symbol)
 
     def get_prev_candle(self, symbol):
-        """Trả về nến 15m trước đã đóng"""
+        """Trả về nến 1h trước đã đóng"""
         return self.prev_candle_data.get(symbol)
 
     def stop(self):
@@ -1387,7 +1387,7 @@ class BaseBot:
 
         tp_sl_info = f" | TP: {self.tp}%" if self.tp else " | TP: Tắt"
         tp_sl_info += f" | SL: {self.sl}%" if self.sl else " | SL: Tắt"
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: 2 nến 15m real-time (volume+body) | Đảo chiều khi tín hiệu ngược{tp_sl_info}")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: 2 nến 1h real-time (volume+body) | Đảo chiều khi tín hiệu ngược{tp_sl_info}")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1698,7 +1698,7 @@ class BaseBot:
         """REST fallback: data[-2] là nến đã đóng gần nhất, data[-1] là nến hiện tại chưa đóng."""
         try:
             url = "https://fapi.binance.com/fapi/v1/klines"
-            params = {"symbol": symbol.upper(), "interval": "15m", "limit": 2}
+            params = {"symbol": symbol.upper(), "interval": "1h", "limit": 2}
             data = binance_api_request(url, params=params)
             if not data or len(data) < 2:
                 return None, None
@@ -2213,7 +2213,7 @@ class BotManager:
 
         if api_key and api_secret:
             self._verify_api_connection()
-            self.log("🟢 HỆ THỐNG BOT TÍN HIỆU 2 NẾN 15m REAL-TIME (VOLUME+BODY) - ĐẢO CHIỀU KHI TÍN HIỆU NGƯỢC")
+            self.log("🟢 HỆ THỐNG BOT TÍN HIỆU 2 NẾN 1h REAL-TIME (VOLUME+BODY) - ĐẢO CHIỀU KHI TÍN HIỆU NGƯỢC")
             self._initialize_cache()
             self._cache_thread = threading.Thread(target=self._cache_updater, daemon=True, name='cache_updater')
             self._cache_thread.start()
@@ -2302,7 +2302,7 @@ class BotManager:
                     'balance_orders': "BẬT" if hasattr(bot, 'enable_balance_orders') and bot.enable_balance_orders else "TẮT",
                 })
 
-            summary = "📊 **THỐNG KÊ CHI TIẾT - BOT TÍN HIỆU 2 NẾN 15m REAL-TIME (VOLUME+BODY)**\n\n"
+            summary = "📊 **THỐNG KÊ CHI TIẾT - BOT TÍN HIỆU 2 NẾN 1h REAL-TIME (VOLUME+BODY)**\n\n"
 
             cache_stats = _COINS_CACHE.get_stats()
             coins_in_cache = cache_stats['count']
@@ -2374,9 +2374,9 @@ class BotManager:
 
     def send_main_menu(self, chat_id):
         welcome = (
-            "🤖 <b>BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 15m REAL-TIME (VOLUME + BODY)</b>\n\n"
+            "🤖 <b>BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 1h REAL-TIME (VOLUME + BODY)</b>\n\n"
             "🎯 <b>CƠ CHẾ HOẠT ĐỘNG:</b>\n"
-            "• Tín hiệu được tính liên tục dựa trên nến 15m đang hình thành (thân nến = giá hiện tại - giá mở, volume lũy kế).\n"
+            "• Tín hiệu được tính liên tục dựa trên nến 1h đang hình thành (thân nến = giá hiện tại - giá mở, volume lũy kế).\n"
             "• Khi tín hiệu ngược hướng với vị thế → đóng lệnh và ĐẢO CHIỀU ngay trên cùng coin.\n"
             "• Nếu đặt cả TP và SL, khi chạm TP hoặc SL sẽ đóng và chuyển sang coin khác.\n"
             "• Không sử dụng cân bằng lệnh toàn cục, không nhồi lệnh.\n\n"
@@ -2440,7 +2440,7 @@ class BotManager:
                 balance_info = (f"\n⚖️ <b>CÂN BẰNG LỆNH (LỌC COIN): BẬT</b>\n"
                                 f"• MUA: giá ≤ {max_price_buy} USDT, volume ≤ {max_volume_buy}\n"
                                 f"• BÁN: giá ≥ {min_price_sell} USDT, volume ≥ {min_volume_sell}\n")
-            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT TÍN HIỆU 2 NẾN 15m REAL-TIME (VOLUME+BODY)</b>\n\n"
+            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT TÍN HIỆU 2 NẾN 1h REAL-TIME (VOLUME+BODY)</b>\n\n"
                            f"🎯 Chiến lược: {strategy_type}\n💰 Đòn bẩy: {lev}x\n"
                            f"📈 % Số dư: {percent}%\n{tp_info}\n{sl_info}\n"
                            f"🔧 Chế độ: {bot_mode}\n🔢 Số bot: {created_count}\n")
@@ -3036,7 +3036,7 @@ class BotManager:
                                    f"\n📉 BÁN: giá ≥ {min_price_sell} USDT, vol ≥ {min_volume_sell}")
 
                 success_msg = (f"✅ <b>ĐÃ TẠO BOT ĐẢO CHIỀU REAL-TIME THÀNH CÔNG</b>\n\n"
-                               f"🤖 Chiến lược: Tín hiệu 2 nến 15m real-time (volume+body)\n🔧 Chế độ: {bot_mode}\n"
+                               f"🤖 Chiến lược: Tín hiệu 2 nến 1h real-time (volume+body)\n🔧 Chế độ: {bot_mode}\n"
                                f"🔢 Số bot: {bot_count}\n💰 Đòn bẩy: {leverage}x\n"
                                f"📊 % Số dư: {percent}%\n"
                                f"🎯 TP: {tp}%" if tp else "🎯 TP: Tắt"
