@@ -790,32 +790,92 @@ def get_mark_price(symbol):
     return price
 
 # ========== HÀM PHÂN TÍCH TÍN HIỆU (GIỮ TÊN CŨ ĐỂ TƯƠNG THÍCH) ==========
-def compute_signal_from_candles(prev_candle, curr_candle):
-    """
-    Tính tín hiệu theo 2 nến:
-    - prev_candle: nến đã đóng gần nhất.
-    - curr_candle: nến hiện tại đang chạy/chưa đóng.
+DOJI_BODY_TO_RANGE_RATIO = 0.10  # body < 10% biên độ nến thì coi là doji/yếu
 
-    Lưu ý: với Binance kline REST/WebSocket, curr_candle[4] hoặc candle['close']
-    chính là giá hiện tại/tức thì của nến đang chạy, còn curr_candle[5]
-    là volume lũy kế tức thì của nến đang chạy.
+def _candle_direction(open_price, close_price):
+    """Trả về hướng nến: BUY nếu xanh, SELL nếu đỏ, None nếu bằng giá."""
+    if close_price > open_price:
+        return "BUY"
+    if close_price < open_price:
+        return "SELL"
+    return None
+
+def _opposite_side(side):
+    if side == "BUY":
+        return "SELL"
+    if side == "SELL":
+        return "BUY"
+    return None
+
+def _is_not_doji(open_price, close_price, high_price=None, low_price=None):
+    """
+    Lọc nến doji/yếu.
+    - Nếu có high/low: body phải >= 10% range nến.
+    - Nếu thiếu high/low: chỉ cần close khác open.
+    """
+    body = abs(close_price - open_price)
+    if body <= 0:
+        return False
+
+    if high_price is None or low_price is None:
+        return True
+
+    candle_range = abs(high_price - low_price)
+    if candle_range <= 0:
+        return False
+
+    return (body / candle_range) >= DOJI_BODY_TO_RANGE_RATIO
+
+def compute_signal_from_candles(prev_candle, curr_candle, prev2_candle=None):
+    """
+    Tính tín hiệu theo luật mới:
+    1) Ưu tiên 2 nến đã đóng gần nhất:
+       - prev_candle = vol1: nến đã đóng gần nhất.
+       - prev2_candle = vol2: nến đã đóng trước prev_candle.
+       Nếu vol1 > 5*vol2 hoặc vol2 > 5*vol1 thì lấy nến volume lớn hơn
+       và vào NGƯỢC hướng nến đó.
+    2) Nếu không có volume spike 5 lần:
+       Nếu nến hiện tại không phải doji và volume_curr > volume_prev
+       thì đi theo hướng nến hiện tại.
+    3) Còn lại None.
     """
     try:
         open_prev = float(prev_candle[1])
+        high_prev = float(prev_candle[2])
+        low_prev = float(prev_candle[3])
         close_prev = float(prev_candle[4])
-        open_curr = float(curr_candle[1])
-        close_curr = float(curr_candle[4])  # giá hiện tại của nến chưa đóng
         volume_prev = float(prev_candle[5])
+
+        open_curr = float(curr_candle[1])
+        high_curr = float(curr_candle[2])
+        low_curr = float(curr_candle[3])
+        close_curr = float(curr_candle[4])  # giá hiện tại của nến chưa đóng
         volume_curr = float(curr_candle[5]) # volume hiện tại/lũy kế của nến chưa đóng
 
-        body_prev = abs(close_prev - open_prev)
-        body_curr = abs(close_curr - open_curr)  # thân nến tức thì: open -> giá hiện tại
+        # 1) Hai nến đã đóng có volume gấp nhau 5 lần -> đánh ngược nến volume lớn hơn.
+        if prev2_candle is not None:
+            open_prev2 = float(prev2_candle[1])
+            high_prev2 = float(prev2_candle[2])
+            low_prev2 = float(prev2_candle[3])
+            close_prev2 = float(prev2_candle[4])
+            volume_prev2 = float(prev2_candle[5])
 
-        if 1.618*volume_curr > volume_prev:
-            if close_curr > open_curr:
-                return "BUY"
-            elif close_curr < open_curr:
-                return "SELL"
+            if volume_prev > 5 * volume_prev2:
+                big_side = _candle_direction(open_prev, close_prev)
+                if big_side and _is_not_doji(open_prev, close_prev, high_prev, low_prev):
+                    return _opposite_side(big_side)
+
+            if volume_prev2 > 5 * volume_prev:
+                big_side = _candle_direction(open_prev2, close_prev2)
+                if big_side and _is_not_doji(open_prev2, close_prev2, high_prev2, low_prev2):
+                    return _opposite_side(big_side)
+
+        # 2) Không có volume spike 5 lần -> xét nến hiện tại.
+        if (
+            _is_not_doji(open_curr, close_curr, high_curr, low_curr)
+            and volume_curr > volume_prev
+        ):
+            return _candle_direction(open_curr, close_curr)
 
         return None
     except Exception as e:
@@ -824,19 +884,19 @@ def compute_signal_from_candles(prev_candle, curr_candle):
 
 def get_candle_signal_1h(symbol):
     """
-    Fallback REST: lấy nến đã đóng gần nhất + nến hiện tại chưa đóng.
-    Không dùng 2 nến đã đóng gần nhất.
+    Fallback REST: lấy 2 nến đã đóng gần nhất + nến hiện tại chưa đóng.
     """
     try:
         url = "https://fapi.binance.com/fapi/v1/klines"
-        params = {"symbol": symbol.upper(), "interval": "1h", "limit": 2}
+        params = {"symbol": symbol.upper(), "interval": "1h", "limit": 3}
         data = binance_api_request(url, params=params)
-        if not data or len(data) < 2:
+        if not data or len(data) < 3:
             return None
 
+        prev2 = data[-3] # nến đã đóng trước nến gần nhất
         prev = data[-2]  # nến đã đóng gần nhất
         curr = data[-1]  # nến hiện tại đang chạy/chưa đóng
-        return compute_signal_from_candles(prev, curr)
+        return compute_signal_from_candles(prev, curr, prev2)
     except Exception as e:
         logger.error(f"Lỗi phân tích tín hiệu nến 1h {symbol}: {e}")
         return None
@@ -1154,7 +1214,8 @@ class RealtimeKlineManager:
         self._stop_event = threading.Event()
         self.executor = ThreadPoolExecutor(max_workers=10)
         self.candle_data = {}          # symbol -> dict (candle hiện tại, chưa đóng)
-        self.prev_candle_data = {}     # symbol -> nến trước đã đóng
+        self.prev_candle_data = {}     # symbol -> nến đã đóng gần nhất (vol1)
+        self.prev2_candle_data = {}    # symbol -> nến đã đóng trước đó (vol2)
         self.callbacks = defaultdict(list)  # symbol -> list of callbacks
 
     def add_symbol(self, symbol, callback):
@@ -1168,20 +1229,33 @@ class RealtimeKlineManager:
 
     def _load_initial_candles(self, symbol):
         """
-        Nạp sẵn 2 nến bằng REST:
-        - data[-2]: nến đã đóng gần nhất
+        Nạp sẵn 3 nến bằng REST:
+        - data[-3]: nến đã đóng trước nến gần nhất (vol2)
+        - data[-2]: nến đã đóng gần nhất (vol1)
         - data[-1]: nến hiện tại chưa đóng, volume/thân nến đang chạy tức thì
-        Việc này giúp bot có prev_candle ngay khi vừa add coin, không phải chờ nến 1h đóng.
         """
         try:
             url = "https://fapi.binance.com/fapi/v1/klines"
-            params = {"symbol": symbol.upper(), "interval": "1h", "limit": 2}
+            params = {"symbol": symbol.upper(), "interval": "1h", "limit": 3}
             data = binance_api_request(url, params=params)
-            if not data or len(data) < 2:
+            if not data or len(data) < 3:
                 return
 
+            prev2 = data[-3]
             prev = data[-2]
             curr = data[-1]
+
+            self.prev2_candle_data[symbol] = {
+                'symbol': symbol,
+                'open': float(prev2[1]),
+                'high': float(prev2[2]),
+                'low': float(prev2[3]),
+                'close': float(prev2[4]),
+                'volume': float(prev2[5]),
+                'is_final': True,
+                'time': int(prev2[0]),
+                'close_time': int(prev2[6])
+            }
             self.prev_candle_data[symbol] = {
                 'symbol': symbol,
                 'open': float(prev[1]),
@@ -1202,7 +1276,8 @@ class RealtimeKlineManager:
                 'volume': float(curr[5]),
                 'is_final': False,
                 'time': int(curr[0]),
-                'close_time': int(curr[6])
+                'close_time': int(curr[6]),
+                'update_ts': time.time()
             }
         except Exception as e:
             logger.error(f"Lỗi nạp nến ban đầu {symbol}: {e}")
@@ -1233,7 +1308,9 @@ class RealtimeKlineManager:
                     # không được để prev = chính cây vừa đóng, nếu không signal sẽ luôn None.
                     if candle['is_final']:
                         old_prev = self.prev_candle_data.get(symbol)
+                        old_prev2 = self.prev2_candle_data.get(symbol)
                         candle['prev_for_signal'] = old_prev.copy() if old_prev else None
+                        candle['prev2_for_signal'] = old_prev2.copy() if old_prev2 else None
                         self.candle_data.pop(symbol, None)
                     else:
                         # Khi x=False thì đây mới là nến hiện tại đang chạy/chưa đóng.
@@ -1244,7 +1321,10 @@ class RealtimeKlineManager:
                         self.executor.submit(cb, symbol, candle)
 
                     if candle['is_final']:
-                        # Sau khi bắn callback, cây vừa đóng trở thành prev cho cây kế tiếp.
+                        # Sau khi bắn callback, cây vừa đóng trở thành prev, prev cũ thành prev2.
+                        old_prev = self.prev_candle_data.get(symbol)
+                        if old_prev:
+                            self.prev2_candle_data[symbol] = old_prev.copy()
                         self.prev_candle_data[symbol] = candle.copy()
             except Exception as e:
                 logger.error(f"Lỗi kline WS {symbol}: {e}")
@@ -1281,6 +1361,7 @@ class RealtimeKlineManager:
                 del self.connections[symbol]
                 self.callbacks.pop(symbol, None)
                 self.candle_data.pop(symbol, None)
+                self.prev2_candle_data.pop(symbol, None)
 
     def get_candle(self, symbol):
         """Trả về nến hiện tại (có thể chưa đóng)"""
@@ -1289,6 +1370,10 @@ class RealtimeKlineManager:
     def get_prev_candle(self, symbol):
         """Trả về nến 1h trước đã đóng"""
         return self.prev_candle_data.get(symbol)
+
+    def get_prev2_candle(self, symbol):
+        """Trả về nến đã đóng trước nến gần nhất"""
+        return self.prev2_candle_data.get(symbol)
 
     def stop(self):
         self._stop_event.set()
@@ -1583,30 +1668,32 @@ class BaseBot:
             return
 
         prev = candle.get('prev_for_signal') or (self.kline_manager.get_prev_candle(symbol) if self.kline_manager else None)
+        prev2 = candle.get('prev2_for_signal') or (self.kline_manager.get_prev2_candle(symbol) if self.kline_manager and hasattr(self.kline_manager, 'get_prev2_candle') else None)
         if prev is None:
             self.realtime_signal[symbol] = None
             self.last_signal_time[symbol] = time.time()
             self.symbol_data[symbol]['realtime_signal'] = None
             return
 
-        signal = self._compute_signal_from_candle(candle, prev)
+        signal = self._compute_signal_from_candle(candle, prev, prev2)
         self.realtime_signal[symbol] = signal
         self.last_signal_time[symbol] = time.time()
         self.symbol_data[symbol]['realtime_signal'] = signal
 
-    def _compute_signal_from_candle(self, current_candle, prev_candle):
+    def _compute_signal_from_candle(self, current_candle, prev_candle, prev2_candle=None):
         """
-        current_candle = nến hiện tại CHƯA ĐÓNG.
-        - current_candle['close']: giá hiện tại/tức thì của nến đang chạy.
-        - current_candle['volume']: volume lũy kế tức thì của nến đang chạy.
-        - current_body = abs(giá hiện tại - open của nến hiện tại).
-
-        prev_candle = nến đã đóng gần nhất.
-        Tín hiệu chỉ có khi volume hiện tại > volume nến trước
-        và thân nến hiện tại > thân nến trước.
+        Luật tín hiệu mới:
+        1) Nếu 2 nến đã đóng gần nhất có volume gấp nhau 5 lần:
+           đi NGƯỢC hướng nến có volume lớn hơn.
+        2) Nếu không có volume spike 5 lần:
+           nến hiện tại phải không phải doji và current_vol > prev_vol
+           thì đi theo hướng nến hiện tại.
+        3) Còn lại None.
         """
         try:
             open_curr = float(current_candle['open'])
+            high_curr = float(current_candle.get('high', open_curr))
+            low_curr = float(current_candle.get('low', open_curr))
             current_price = float(current_candle.get('close', 0))
             symbol = current_candle.get('symbol')
 
@@ -1615,20 +1702,45 @@ class BaseBot:
                 last_price = float(self.symbol_data[symbol].get('last_price', 0) or 0)
                 if last_price > 0:
                     current_price = last_price
+                    high_curr = max(high_curr, current_price)
+                    low_curr = min(low_curr, current_price)
 
             if current_price <= 0:
                 return None
 
-            current_body = abs(current_price - open_curr)
-            prev_body = abs(float(prev_candle['close']) - float(prev_candle['open']))
-            current_vol = float(current_candle['volume'])
             prev_vol = float(prev_candle['volume'])
 
-            if 1.618*current_vol > prev_vol:
-                if current_price > open_curr:
-                    return "BUY"
-                elif current_price < open_curr:
-                    return "SELL"
+            # 1) Ưu tiên so sánh volume của 2 nến đã đóng: vol1 và vol2.
+            if prev2_candle is not None:
+                prev2_vol = float(prev2_candle['volume'])
+
+                if prev_vol > 5 * prev2_vol:
+                    big_side = _candle_direction(float(prev_candle['open']), float(prev_candle['close']))
+                    if big_side and _is_not_doji(
+                        float(prev_candle['open']),
+                        float(prev_candle['close']),
+                        float(prev_candle.get('high', prev_candle['open'])),
+                        float(prev_candle.get('low', prev_candle['open']))
+                    ):
+                        return _opposite_side(big_side)
+
+                if prev2_vol > 5 * prev_vol:
+                    big_side = _candle_direction(float(prev2_candle['open']), float(prev2_candle['close']))
+                    if big_side and _is_not_doji(
+                        float(prev2_candle['open']),
+                        float(prev2_candle['close']),
+                        float(prev2_candle.get('high', prev2_candle['open'])),
+                        float(prev2_candle.get('low', prev2_candle['open']))
+                    ):
+                        return _opposite_side(big_side)
+
+            # 2) Không có volume spike 5 lần -> xét nến hiện tại.
+            current_vol = float(current_candle['volume'])
+            if (
+                _is_not_doji(open_curr, current_price, high_curr, low_curr)
+                and current_vol > prev_vol
+            ):
+                return _candle_direction(open_curr, current_price)
 
             return None
         except Exception as e:
@@ -1651,11 +1763,13 @@ class BaseBot:
             symbol = symbol.upper()
             candle = None
             prev = None
+            prev2 = None
 
             # 1) Đọc nến hiện tại CHƯA ĐÓNG trực tiếp từ kline websocket.
             if self.kline_manager:
                 candle = self.kline_manager.get_candle(symbol)
                 prev = self.kline_manager.get_prev_candle(symbol)
+                prev2 = self.kline_manager.get_prev2_candle(symbol) if hasattr(self.kline_manager, 'get_prev2_candle') else None
 
             # 2) Nếu dữ liệu websocket chưa đủ hoặc đã đứng quá lâu thì lấy REST limit=2.
             # REST data[-1] của Binance là cây hiện tại đang chạy; close của cây này là giá tạm thời mới nhất.
@@ -1666,12 +1780,14 @@ class BaseBot:
                 ws_stale = update_ts <= 0 or (now - update_ts) > 3
 
             if (not candle) or (not prev) or ws_stale:
-                rest_candle, rest_prev = self._get_rest_current_and_prev_candle(symbol)
+                rest_candle, rest_prev, rest_prev2 = self._get_rest_current_and_prev_candle(symbol)
                 if rest_candle and rest_prev:
-                    candle, prev = rest_candle, rest_prev
+                    candle, prev, prev2 = rest_candle, rest_prev, rest_prev2
                     if self.kline_manager:
                         self.kline_manager.candle_data[symbol] = rest_candle
                         self.kline_manager.prev_candle_data[symbol] = rest_prev
+                        if rest_prev2:
+                            self.kline_manager.prev2_candle_data[symbol] = rest_prev2
 
             # 3) Không có dữ liệu thì trả None, không đọc cache cũ.
             if not candle or not prev:
@@ -1681,7 +1797,7 @@ class BaseBot:
                     self.symbol_data[symbol]['realtime_signal'] = None
                 return None
 
-            signal = self._compute_signal_from_candle(candle, prev)
+            signal = self._compute_signal_from_candle(candle, prev, prev2)
 
             # Cập nhật cache chỉ để xem/log, quyết định đã dựa trên dữ liệu live phía trên.
             self.realtime_signal[symbol] = signal
@@ -1695,16 +1811,24 @@ class BaseBot:
             return None
 
     def _get_rest_current_and_prev_candle(self, symbol):
-        """REST fallback: data[-2] là nến đã đóng gần nhất, data[-1] là nến hiện tại chưa đóng."""
+        """REST fallback: data[-3] và data[-2] là 2 nến đã đóng, data[-1] là nến hiện tại chưa đóng."""
         try:
             url = "https://fapi.binance.com/fapi/v1/klines"
-            params = {"symbol": symbol.upper(), "interval": "1h", "limit": 2}
+            params = {"symbol": symbol.upper(), "interval": "1h", "limit": 3}
             data = binance_api_request(url, params=params)
-            if not data or len(data) < 2:
-                return None, None
+            if not data or len(data) < 3:
+                return None, None, None
 
+            prev2 = data[-3]
             prev = data[-2]
             curr = data[-1]
+            prev2_candle = {
+                'symbol': symbol.upper(),
+                'open': float(prev2[1]), 'high': float(prev2[2]), 'low': float(prev2[3]),
+                'close': float(prev2[4]), 'volume': float(prev2[5]),
+                'is_final': True, 'time': int(prev2[0]), 'close_time': int(prev2[6]),
+                'update_ts': time.time()
+            }
             prev_candle = {
                 'symbol': symbol.upper(),
                 'open': float(prev[1]), 'high': float(prev[2]), 'low': float(prev[3]),
@@ -1720,10 +1844,10 @@ class BaseBot:
                 'is_final': False, 'time': int(curr[0]), 'close_time': int(curr[6]),
                 'update_ts': time.time()
             }
-            return curr_candle, prev_candle
+            return curr_candle, prev_candle, prev2_candle
         except Exception as e:
             logger.error(f"Lỗi REST fallback lấy nến {symbol}: {e}")
-            return None, None
+            return None, None, None
 
     def _debug_realtime_signal(self, symbol, current_side=None):
         """Log nhanh lý do chưa có tín hiệu để kiểm tra volume/body thực tế bot đang thấy."""
