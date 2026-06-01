@@ -790,7 +790,7 @@ def get_mark_price(symbol):
     return price
 
 # ========== HÀM PHÂN TÍCH TÍN HIỆU (GIỮ TÊN CŨ ĐỂ TƯƠNG THÍCH) ==========
-DOJI_BODY_TO_RANGE_RATIO = 0.10  # body < 10% biên độ nến thì coi là doji/yếu
+DOJI_BODY_TO_RANGE_RATIO = 0.25  # body < 10% biên độ nến thì coi là doji/yếu
 
 def _candle_direction(open_price, close_price):
     """Trả về hướng nến: BUY nếu xanh, SELL nếu đỏ, None nếu bằng giá."""
@@ -860,12 +860,12 @@ def compute_signal_from_candles(prev_candle, curr_candle, prev2_candle=None):
             close_prev2 = float(prev2_candle[4])
             volume_prev2 = float(prev2_candle[5])
 
-            if volume_prev > 5 * volume_prev2:
+            if volume_prev > 7 * volume_prev2:
                 big_side = _candle_direction(open_prev, close_prev)
                 if big_side and _is_not_doji(open_prev, close_prev, high_prev, low_prev):
                     return _opposite_side(big_side)
 
-            if volume_prev2 > 5 * volume_prev:
+            if volume_prev2 > 7 * volume_prev:
                 big_side = _candle_direction(open_prev2, close_prev2)
                 if big_side and _is_not_doji(open_prev2, close_prev2, high_prev2, low_prev2):
                     return _opposite_side(big_side)
