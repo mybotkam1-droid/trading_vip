@@ -263,11 +263,10 @@ def create_strategy_config_keyboard():
     return {
         "keyboard": [
             [{"text": "📊 Xem tham số chiến lược"}],
-            [{"text": "✏️ Entry score"}, {"text": "✏️ Exit score"}],
-            [{"text": "✏️ Min progress entry"}, {"text": "✏️ Min progress exit"}],
+            [{"text": "✏️ Signal score"}],
+            [{"text": "✏️ Min progress"}],
             [{"text": "✏️ Projected volume factor"}, {"text": "✏️ Body speed factor"}],
-            [{"text": "✏️ Doji ratio"}, {"text": "✏️ Volume spike factor"}],
-            [{"text": "✏️ Exit persist seconds"}, {"text": "🔄 Reset chiến lược"}],
+            [{"text": "🔄 Reset chiến lược"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
         "resize_keyboard": True, "one_time_keyboard": True
@@ -277,8 +276,8 @@ def create_strategy_value_keyboard():
     return {
         "keyboard": [
             [{"text": "0.10"}, {"text": "0.15"}, {"text": "0.20"}],
-            [{"text": "1.10"}, {"text": "1.20"}, {"text": "1.50"}],
-            [{"text": "3"}, {"text": "4"}, {"text": "5"}],
+            [{"text": "1.00"}, {"text": "1.10"}, {"text": "1.20"}, {"text": "1.50"}],
+            [{"text": "1"}, {"text": "2"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
         "resize_keyboard": True, "one_time_keyboard": True
@@ -814,21 +813,36 @@ def get_mark_price(symbol):
     _mark_price_time[symbol] = now
     return price
 
-# ========== HÀM PHÂN TÍCH TÍN HIỆU REALTIME THEO ĐIỂM LỰC NẾN ==========
+# ========== HÀM PHÂN TÍCH TÍN HIỆU REALTIME THEO TỐC ĐỘ NẾN 1H ==========
 class StrategyConfig:
-    """Cấu hình chiến lược có thể chỉnh từ Telegram."""
+    """Cấu hình chiến lược tốc độ nến có thể chỉnh từ Telegram."""
     DEFAULTS = {
-        'timeframe_seconds': 3600.0,          # File hiện dùng kline 1h. Nếu đổi stream thì sửa tham số này cho đúng.
-        'doji_ratio': 0.10,                  # body/range < 0.10 coi là doji/yếu.
-        'volume_spike_factor': 5.0,          # vol1 gấp vol2 hoặc ngược lại -> tín hiệu đảo chiều mạnh.
-        'entry_min_progress': 0.15,          # chỉ vào sau khi nến chạy ít nhất 15% thời gian.
-        'exit_min_progress': 0.10,           # xét đảo chiều sau khi nến chạy ít nhất 10%.
-        'projected_volume_factor': 1.20,     # volume dự phóng phải vượt vol1 * hệ số này.
-        'body_speed_factor': 1.00,           # body dự phóng phải vượt body1 * hệ số này.
-        'entry_score': 3,                    # vào lệnh nhạy hơn.
-        'exit_score': 4,                     # đóng/đảo chiều chặt hơn.
-        'exit_persist_seconds': 3.0,         # tín hiệu ngược phải tồn tại đủ giây.
-        'max_body_avg_factor': 2.8,          # tránh vào khi thân nến đã quá xa so với trung bình 2 nến trước.
+        # File hiện dùng kline 1h. Nếu đổi stream kline thì sửa tham số này cho đúng.
+        'timeframe_seconds': 3600.0,
+
+        # Nến 1h hiện tại phải chạy tối thiểu bao nhiêu phần thời gian mới xét.
+        # 0.10 = 6 phút, 0.15 = 9 phút, 0.20 = 12 phút.
+        'entry_min_progress': 0.15,
+        'exit_min_progress': 0.15,   # giữ để tương thích, luôn đồng bộ với entry_min_progress.
+
+        # Chỉ dùng tốc độ:
+        # projected_volume = volume0 / progress phải vượt volume1 * hệ số.
+        'projected_volume_factor': 1.20,
+
+        # projected_body = body0 / progress phải vượt body1 * hệ số.
+        'body_speed_factor': 1.00,
+
+        # Điểm tối thiểu. Chiến lược tốc độ thuần có 2 điểm chính:
+        # +1 nếu tốc độ volume đạt, +1 nếu tốc độ body đạt.
+        # Mặc định 2 nghĩa là bắt buộc đạt cả volume speed và body speed.
+        'entry_score': 2,
+        'exit_score': 2,             # giữ để tương thích, luôn đồng bộ với entry_score.
+
+        # Các key cũ giữ lại để tránh lỗi cấu hình cũ, nhưng KHÔNG còn dùng trong tín hiệu.
+        'doji_ratio': 0.10,
+        'volume_spike_factor': 5.0,
+        'exit_persist_seconds': 0.0,
+        'max_body_avg_factor': 999999.0,
     }
 
     def __init__(self):
@@ -852,6 +866,16 @@ class StrategyConfig:
                     else:
                         value = float(value)
                     self._config[key] = value
+
+                    # Đồng bộ mở/đóng: mở và đóng dùng cùng một tín hiệu tốc độ.
+                    if key == 'entry_score':
+                        self._config['exit_score'] = value
+                    elif key == 'exit_score':
+                        self._config['entry_score'] = value
+                    elif key == 'entry_min_progress':
+                        self._config['exit_min_progress'] = value
+                    elif key == 'exit_min_progress':
+                        self._config['entry_min_progress'] = value
         return self.get_all()
 
     def reset(self):
@@ -864,21 +888,15 @@ _STRATEGY_CONFIG = StrategyConfig()
 def get_strategy_config_text():
     c = _STRATEGY_CONFIG.get_all()
     return (
-        "🎯 <b>THAM SỐ CHIẾN LƯỢC REALTIME</b>\n\n"
-        f"• Entry score: {c['entry_score']}\n"
-        f"• Exit score: {c['exit_score']}\n"
-        f"• Min progress entry: {c['entry_min_progress']:.2f}\n"
-        f"• Min progress exit: {c['exit_min_progress']:.2f}\n"
+        "🎯 <b>THAM SỐ CHIẾN LƯỢC SPEED ONLY 1H</b>\n\n"
+        f"• Signal score: {c['entry_score']} / 2\n"
+        f"• Min progress: {c['entry_min_progress']:.2f}\n"
         f"• Projected volume factor: {c['projected_volume_factor']:.2f}\n"
-        f"• Body speed factor: {c['body_speed_factor']:.2f}\n"
-        f"• Doji ratio: {c['doji_ratio']:.2f}\n"
-        f"• Volume spike factor: {c['volume_spike_factor']:.2f}\n"
-        f"• Exit persist seconds: {c['exit_persist_seconds']:.1f}s\n"
-        f"• Max body avg factor: {c['max_body_avg_factor']:.2f}\n\n"
-        "ENTRY dùng score thấp hơn để bắt sớm. EXIT dùng score cao hơn và cần duy trì vài giây để tránh đảo liên tục."
+        f"• Body speed factor: {c['body_speed_factor']:.2f}\n\n"
+        "Bot chỉ xét tốc độ nến 1h hiện tại so với nến 1h trước đã đóng.\n"
+        "Không dùng volume spike, không dùng doji filter, không dùng điều kiện đảo chiều riêng.\n"
+        "Mở và đóng/đảo chiều dùng cùng một tín hiệu; đang có lệnh mà xuất hiện tín hiệu ngược đủ chuẩn thì đóng và đảo ngay."
     )
-
-DOJI_BODY_TO_RANGE_RATIO = lambda: _STRATEGY_CONFIG.get('doji_ratio', 0.10)
 
 def _candle_direction(open_price, close_price):
     """Trả về hướng nến: BUY nếu xanh, SELL nếu đỏ, None nếu bằng giá."""
@@ -887,32 +905,6 @@ def _candle_direction(open_price, close_price):
     if close_price < open_price:
         return "SELL"
     return None
-
-def _opposite_side(side):
-    if side == "BUY":
-        return "SELL"
-    if side == "SELL":
-        return "BUY"
-    return None
-
-def _is_not_doji(open_price, close_price, high_price=None, low_price=None):
-    """
-    Lọc nến doji/yếu.
-    - Nếu có high/low: body phải >= 10% range nến.
-    - Nếu thiếu high/low: chỉ cần close khác open.
-    """
-    body = abs(close_price - open_price)
-    if body <= 0:
-        return False
-
-    if high_price is None or low_price is None:
-        return True
-
-    candle_range = abs(high_price - low_price)
-    if candle_range <= 0:
-        return False
-
-    return (body / candle_range) >= _STRATEGY_CONFIG.get('doji_ratio', 0.10)
 
 def _safe_progress(candle, timeframe_seconds=None):
     """Tính nến hiện tại đã chạy được bao nhiêu phần thời gian."""
@@ -930,80 +922,67 @@ def _safe_progress(candle, timeframe_seconds=None):
 
 def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_curr,
                         prev_candle, prev2_candle=None, progress=1.0, mode='entry'):
-    """Trả về (signal, score, reason, is_spike)."""
+    """
+    Chiến lược SPEED ONLY 1H.
+
+    Dữ liệu:
+    - Nến 0: nến 1h hiện tại đang chạy.
+    - Nến 1: nến 1h trước đã đóng.
+
+    Tốc độ:
+    - projected_volume = volume0 / progress
+    - projected_body   = body0 / progress
+
+    Tín hiệu:
+    - Nếu projected_volume > volume1 * projected_volume_factor: +1 điểm.
+    - Nếu projected_body > body1 * body_speed_factor: +1 điểm.
+    - Nếu score >= signal_score thì trả BUY/SELL theo hướng nến hiện tại.
+    """
     try:
         cfg = _STRATEGY_CONFIG.get_all()
         prev_open = float(prev_candle['open']) if isinstance(prev_candle, dict) else float(prev_candle[1])
-        prev_high = float(prev_candle.get('high', prev_open)) if isinstance(prev_candle, dict) else float(prev_candle[2])
-        prev_low = float(prev_candle.get('low', prev_open)) if isinstance(prev_candle, dict) else float(prev_candle[3])
         prev_close = float(prev_candle['close']) if isinstance(prev_candle, dict) else float(prev_candle[4])
         prev_vol = float(prev_candle['volume']) if isinstance(prev_candle, dict) else float(prev_candle[5])
         prev_body = abs(prev_close - prev_open)
-
-        prev2_body = prev_body
-        prev2_vol = None
-        if prev2_candle is not None:
-            prev2_open = float(prev2_candle['open']) if isinstance(prev2_candle, dict) else float(prev2_candle[1])
-            prev2_high = float(prev2_candle.get('high', prev2_open)) if isinstance(prev2_candle, dict) else float(prev2_candle[2])
-            prev2_low = float(prev2_candle.get('low', prev2_open)) if isinstance(prev2_candle, dict) else float(prev2_candle[3])
-            prev2_close = float(prev2_candle['close']) if isinstance(prev2_candle, dict) else float(prev2_candle[4])
-            prev2_vol = float(prev2_candle['volume']) if isinstance(prev2_candle, dict) else float(prev2_candle[5])
-            prev2_body = abs(prev2_close - prev2_open)
-
-            spike_factor = float(cfg['volume_spike_factor'])
-            if prev_vol > spike_factor * max(prev2_vol, 1e-12):
-                big_side = _candle_direction(prev_open, prev_close)
-                if big_side and _is_not_doji(prev_open, prev_close, prev_high, prev_low):
-                    return _opposite_side(big_side), max(int(cfg['exit_score']), 5), 'volume_spike_prev1_reverse', True
-            if prev2_vol > spike_factor * max(prev_vol, 1e-12):
-                big_side = _candle_direction(prev2_open, prev2_close)
-                if big_side and _is_not_doji(prev2_open, prev2_close, prev2_high, prev2_low):
-                    return _opposite_side(big_side), max(int(cfg['exit_score']), 5), 'volume_spike_prev2_reverse', True
 
         side = _candle_direction(open_curr, current_price)
         if not side:
             return None, 0, 'flat_current', False
 
-        min_progress = cfg['entry_min_progress'] if mode == 'entry' else cfg['exit_min_progress']
-        if progress < float(min_progress):
+        min_progress = float(cfg['entry_min_progress'])
+        if progress < min_progress:
             return None, 0, f'progress_too_early_{progress:.2f}', False
 
-        if not _is_not_doji(open_curr, current_price, high_curr, low_curr):
-            return None, 0, 'current_doji', False
+        current_body = abs(float(current_price) - float(open_curr))
+        if current_body <= 0:
+            return None, 0, 'body_zero', False
 
-        current_body = abs(current_price - open_curr)
-        avg_body = max((prev_body + prev2_body) / 2.0, 1e-12)
-        projected_vol = float(volume_curr) / max(progress, 0.001)
-        projected_body = current_body / max(progress, 0.001)
+        projected_vol = float(volume_curr) / max(float(progress), 0.001)
+        projected_body = current_body / max(float(progress), 0.001)
 
         score = 0
         reasons = []
         if projected_vol > prev_vol * float(cfg['projected_volume_factor']):
             score += 1
-            reasons.append('projected_volume')
-        if projected_body > prev_body * float(cfg['body_speed_factor']):
+            reasons.append('volume_speed')
+        if projected_body > max(prev_body, 1e-12) * float(cfg['body_speed_factor']):
             score += 1
             reasons.append('body_speed')
-        if current_body > avg_body * 0.35:
-            score += 1
-            reasons.append('body_visible')
-        if float(volume_curr) > prev_vol * 0.35:
-            score += 1
-            reasons.append('real_volume_progress')
-        if current_body <= avg_body * float(cfg['max_body_avg_factor']):
-            score += 1
-            reasons.append('not_too_far')
 
-        threshold = int(cfg['entry_score'] if mode == 'entry' else cfg['exit_score'])
+        threshold = int(cfg['entry_score'])
+        details = (
+            '+'.join(reasons) or 'speed_low'
+        ) + f" | progress={progress:.2f} projected_vol={projected_vol:.4f} prev_vol={prev_vol:.4f} projected_body={projected_body:.8f} prev_body={prev_body:.8f}"
+
         if score >= threshold:
-            return side, score, '+'.join(reasons), False
-        return None, score, '+'.join(reasons) or 'score_low', False
+            return side, score, details, False
+        return None, score, details, False
     except Exception as e:
-        logger.error(f"Lỗi chấm điểm tín hiệu: {e}")
+        logger.error(f"Lỗi chấm điểm tín hiệu tốc độ: {e}")
         return None, 0, 'error', False
 
 def compute_signal_from_candles(prev_candle, curr_candle, prev2_candle=None):
-    """Hàm tương thích cũ: trả BUY/SELL/None theo chiến lược realtime mới."""
+    """Hàm tương thích cũ: trả BUY/SELL/None theo chiến lược tốc độ nến 1h."""
     try:
         open_curr = float(curr_candle[1])
         high_curr = float(curr_candle[2])
@@ -1013,7 +992,7 @@ def compute_signal_from_candles(prev_candle, curr_candle, prev2_candle=None):
         progress = _safe_progress(curr_candle)
         signal, score, reason, _ = _score_signal_parts(
             open_curr, close_curr, high_curr, low_curr, volume_curr,
-            prev_candle, prev2_candle, progress=progress, mode='entry'
+            prev_candle, None, progress=progress, mode='entry'
         )
         return signal
     except Exception as e:
@@ -1022,19 +1001,19 @@ def compute_signal_from_candles(prev_candle, curr_candle, prev2_candle=None):
 
 def get_candle_signal_1h(symbol):
     """
-    Fallback REST: lấy 2 nến đã đóng gần nhất + nến hiện tại chưa đóng.
+    Fallback REST: lấy nến đã đóng gần nhất + nến hiện tại chưa đóng.
+    Chỉ dùng tốc độ nến hiện tại so với nến trước, không dùng volume spike.
     """
     try:
         url = "https://fapi.binance.com/fapi/v1/klines"
-        params = {"symbol": symbol.upper(), "interval": "1h", "limit": 3}
+        params = {"symbol": symbol.upper(), "interval": "1h", "limit": 2}
         data = binance_api_request(url, params=params)
-        if not data or len(data) < 3:
+        if not data or len(data) < 2:
             return None
 
-        prev2 = data[-3] # nến đã đóng trước nến gần nhất
         prev = data[-2]  # nến đã đóng gần nhất
         curr = data[-1]  # nến hiện tại đang chạy/chưa đóng
-        return compute_signal_from_candles(prev, curr, prev2)
+        return compute_signal_from_candles(prev, curr, None)
     except Exception as e:
         logger.error(f"Lỗi phân tích tín hiệu nến 1h {symbol}: {e}")
         return None
@@ -1066,6 +1045,42 @@ def has_open_position(symbol, api_key, api_secret):
         if abs(float(pos.get('positionAmt', 0))) > 0:
             return True
     return False
+
+# Cache nhẹ cho positionRisk để tránh spam Binance.
+_POSITION_CACHE = {}
+_POSITION_CACHE_LOCK = threading.RLock()
+_POSITION_CACHE_TTL = 8.0
+
+def get_position_cached(symbol, api_key, api_secret, ttl=_POSITION_CACHE_TTL, force=False):
+    symbol = symbol.upper()
+    now = time.time()
+    cache_key = (symbol, api_key[-6:] if api_key else '')
+    with _POSITION_CACHE_LOCK:
+        item = _POSITION_CACHE.get(cache_key)
+        if item and not force and now - item.get('ts', 0) < ttl:
+            return item.get('pos')
+
+    positions = get_positions(symbol, api_key, api_secret)
+    pos = positions[0] if positions else None
+    with _POSITION_CACHE_LOCK:
+        _POSITION_CACHE[cache_key] = {'ts': now, 'pos': pos}
+    return pos
+
+def invalidate_position_cache(symbol, api_key=None):
+    symbol = symbol.upper()
+    with _POSITION_CACHE_LOCK:
+        for key in list(_POSITION_CACHE.keys()):
+            if key[0] == symbol:
+                _POSITION_CACHE.pop(key, None)
+
+def has_open_position_cached(symbol, api_key, api_secret, ttl=_POSITION_CACHE_TTL, force=False):
+    pos = get_position_cached(symbol, api_key, api_secret, ttl=ttl, force=force)
+    if not pos:
+        return False
+    try:
+        return abs(float(pos.get('positionAmt', 0))) > 0
+    except Exception:
+        return False
 
 # ========== LỚP QUẢN LÝ (giữ nguyên) ==========
 class CoinManager:
@@ -1230,8 +1245,8 @@ class SmartCoinFinder:
                     continue
                 if self._bot_manager and self._bot_manager.bot_coordinator.is_temp_blacklisted(symbol):
                     continue
-                if has_open_position(symbol, self.api_key, self.api_secret):
-                    continue
+                # Không gọi positionRisk cho từng coin khi quét, tránh spam Binance/BadRequest.
+                # Bot chỉ loại coin đang được bot khác quản lý bằng coin_manager.
                 if self._bot_manager and self._bot_manager.coin_manager.is_coin_active(symbol):
                     continue
 
@@ -1589,7 +1604,7 @@ class BaseBot:
         self._reverse_symbol = None
         self._reverse_side = None
 
-        if symbol and not has_open_position(symbol, self.api_key, self.api_secret):
+        if symbol:
             self._add_symbol(symbol)
 
         self.thread = threading.Thread(target=self._run, daemon=True, name=f"bot-{self.bot_id[-8:]}")
@@ -1597,7 +1612,7 @@ class BaseBot:
 
         tp_sl_info = f" | TP: {self.tp}%" if self.tp else " | TP: Tắt"
         tp_sl_info += f" | SL: {self.sl}%" if self.sl else " | SL: Tắt"
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: 2 nến 1h real-time (volume+body) | Đảo chiều khi tín hiệu ngược{tp_sl_info}")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: Speed-only 1h realtime (volume speed + body speed) | Đảo chiều khi tín hiệu ngược đủ chuẩn{tp_sl_info}")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1652,40 +1667,33 @@ class BaseBot:
                     time.sleep(5)
                     continue
 
-                # Xử lý đảo chiều đang chờ
+                # Xử lý đảo chiều đang chờ.
+                # Không spam positionRisk ở đây; nếu lệnh đóng market đã trả orderId thì coi như đã có thể mở ngược.
                 if self._pending_reverse and self._reverse_symbol in self.active_symbols:
                     rev_symbol = self._reverse_symbol
                     rev_side = self._reverse_side
 
-                    # Sau lệnh đóng market, Binance đôi khi cần thêm chút thời gian để positionRisk về 0.
-                    # Không gọi _open_symbol_position ngay nếu API vẫn thấy vị thế cũ, tránh bị stop coin oan.
-                    if has_open_position(rev_symbol, self.api_key, self.api_secret):
-                        self.log(f"⏳ {rev_symbol} đang chờ Binance xác nhận vị thế cũ đã đóng trước khi đảo chiều...")
-                        time.sleep(1)
-                        continue
-
-                    fresh_signal = self._get_fresh_realtime_signal(rev_symbol)
+                    fresh_signal = self._get_fresh_realtime_signal(rev_symbol, mode='entry')
                     if fresh_signal != rev_side:
-                        self.log(f"⚠️ {rev_symbol} chưa đủ tín hiệu đảo chiều ({fresh_signal} vs {rev_side}), tiếp tục chờ")
+                        # Tín hiệu đã mất thì bỏ đảo chiều, không spam log mỗi giây.
+                        if time.time() - self.last_signal_debug_time.get(f'{rev_symbol}_reverse_wait', 0) > 5:
+                            self.last_signal_debug_time[f'{rev_symbol}_reverse_wait'] = time.time()
+                            self.log(f"⚠️ {rev_symbol} tín hiệu đảo chiều đã yếu/mất ({fresh_signal} vs {rev_side}), bỏ chờ đảo")
+                        self._pending_reverse = False
+                        self._reverse_symbol = None
+                        self._reverse_side = None
                         time.sleep(1)
                         continue
 
                     self.log(f"🔄 Đang thực hiện đảo chiều trên {rev_symbol} theo hướng {rev_side}")
-                    if self._open_symbol_position(
-                        rev_symbol,
-                        rev_side,
-                        skip_signal_check=False   # Luôn kiểm tra lại tín hiệu realtime
-                    ):
+                    if self._open_symbol_position(rev_symbol, rev_side, skip_signal_check=True):
                         self.log(f"✅ Đảo chiều thành công trên {rev_symbol}")
-                        self._pending_reverse = False
-                        self._reverse_symbol = None
-                        self._reverse_side = None
                     else:
                         self.log(f"❌ Đảo chiều thất bại trên {rev_symbol}, dừng coin")
                         self.stop_symbol(rev_symbol, failed=True)
-                        self._pending_reverse = False
-                        self._reverse_symbol = None
-                        self._reverse_side = None
+                    self._pending_reverse = False
+                    self._reverse_symbol = None
+                    self._reverse_side = None
                     time.sleep(1)
                     continue
 
@@ -1718,10 +1726,8 @@ class BaseBot:
                 self.stop_symbol(symbol, failed=True)
                 return False
 
-            if current_time - symbol_info.get('last_position_check', 0) > 30:
-                self._check_symbol_position(symbol)
-                symbol_info['last_position_check'] = current_time
-
+            # Không kiểm tra positionRisk định kỳ để tránh spam Binance.
+            # Trạng thái vị thế được cập nhật sau khi mở/đóng lệnh và chỉ force-check khi thật sự cần.
             if symbol_info['position_open']:
                 # Kiểm tra TP/SL
                 self._check_symbol_tp_sl(symbol)
@@ -1739,10 +1745,9 @@ class BaseBot:
                     if signal is None:
                         return False
 
-                    if not has_open_position(symbol, self.api_key, self.api_secret):
-                        if self._open_symbol_position(symbol, signal, skip_signal_check=False):
-                            symbol_info['last_trade_time'] = current_time
-                            return True
+                    if self._open_symbol_position(symbol, signal, skip_signal_check=False):
+                        symbol_info['last_trade_time'] = current_time
+                        return True
                 return False
         except Exception as e:
             self.log(f"❌ Lỗi xử lý {symbol}: {str(e)}")
@@ -1805,10 +1810,10 @@ class BaseBot:
 
     def _compute_signal_from_candle(self, current_candle, prev_candle, prev2_candle=None, mode='entry', return_details=False):
         """
-        Chiến lược điểm lực nến realtime:
-        - Volume spike 2 nến đã đóng: đảo ngược nến volume lớn hơn.
-        - Nếu không spike: dùng volume dự phóng, body speed, lọc doji, lọc quá xa.
-        - Entry nhạy hơn, Exit chặt hơn.
+        Chiến lược SPEED ONLY 1H:
+        - Chỉ dùng tốc độ volume và tốc độ body của nến 1h hiện tại so với nến 1h trước.
+        - Không dùng volume spike, không dùng doji filter, không dùng điều kiện đảo riêng.
+        - Mở và đóng/đảo chiều dùng cùng một tín hiệu.
         """
         try:
             open_curr = float(current_candle['open'])
@@ -1957,8 +1962,8 @@ class BaseBot:
 
     def _check_realtime_exit(self, symbol):
         """
-        Đóng/đảo chiều chỉ khi tín hiệu ngược đủ mạnh và duy trì đủ thời gian.
-        Entry có thể nhạy, nhưng exit phải lì hơn để tránh đảo liên tục.
+        Đóng/đảo chiều ngay khi xuất hiện tín hiệu ngược đủ chuẩn.
+        Tín hiệu đóng và mở dùng chung một bộ chấm điểm để tránh trường hợp mở nhạy nhưng đóng quá trễ.
         """
         if symbol not in self.symbol_data:
             return
@@ -1971,33 +1976,20 @@ class BaseBot:
         if current_side not in ('BUY', 'SELL'):
             return
 
-        details = self._get_fresh_realtime_signal(symbol, mode='exit', return_details=True)
+        details = self._get_fresh_realtime_signal(symbol, mode='entry', return_details=True)
         signal = details.get('signal')
 
         self._debug_realtime_signal(symbol, current_side)
 
         if signal is None or signal == current_side:
-            self.exit_candidate.pop(symbol, None)
             return
 
-        now = time.time()
-        persist_seconds = float(_STRATEGY_CONFIG.get('exit_persist_seconds', 3.0))
-        candidate = self.exit_candidate.get(symbol)
-        if not candidate or candidate.get('side') != signal:
-            self.exit_candidate[symbol] = {'side': signal, 'since': now, 'score': details.get('score', 0), 'reason': details.get('reason', '')}
-            if not details.get('is_spike'):
-                self.log(f"⚠️ {symbol} thấy tín hiệu ngược {signal} score={details.get('score')} reason={details.get('reason')}, đang xác nhận...")
-            return
-
-        elapsed = now - float(candidate.get('since', now))
-        if details.get('is_spike') or elapsed >= persist_seconds:
-            self.log(
-                f"🕯️ {symbol} - Đảo chiều rõ ràng ({signal} vs {current_side}) | "
-                f"score={details.get('score')} | {details.get('reason')} | giữ {elapsed:.1f}s, đóng lệnh và đảo chiều"
-            )
-            self.exit_candidate.pop(symbol, None)
-            self._close_symbol_position(symbol, reason="Candle opposite (strong realtime)")
-            return
+        self.log(
+            f"🕯️ {symbol} - Tín hiệu realtime ngược đủ chuẩn ({signal} vs {current_side}) | "
+            f"score={details.get('score')} | {details.get('reason')} | đóng lệnh và đảo chiều"
+        )
+        self._close_symbol_position(symbol, reason="Candle opposite (same realtime signal)")
+        return
 
     def _check_symbol_tp_sl(self, symbol):
         if symbol not in self.symbol_data:
@@ -2006,18 +1998,10 @@ class BaseBot:
         if not data['position_open']:
             return
 
-        real_pos = self._force_check_position(symbol)
-        if real_pos:
-            entry = float(real_pos.get('entryPrice', data['entry']))
-            qty = float(real_pos.get('positionAmt', data['qty']))
-            side = 'BUY' if qty > 0 else 'SELL'
-            data['entry'] = entry
-            data['qty'] = qty
-            data['side'] = side
-        else:
-            entry = data['entry']
-
-        if entry <= 0 or abs(data['qty']) <= 0:
+        # Không gọi positionRisk tại đây. TP/SL chỉ cần entry/side/qty local;
+        # khi thật sự đóng lệnh, _close_symbol_position mới force-check đúng 1 lần để lấy qty chuẩn.
+        entry = float(data.get('entry', 0) or 0)
+        if entry <= 0 or abs(float(data.get('qty', 0) or 0)) <= 0:
             return
 
         current_price = get_mark_price(symbol)
@@ -2067,6 +2051,7 @@ class BaseBot:
                 time.sleep(1)
 
                 result = place_order(symbol, close_side, qty, self.api_key, self.api_secret)
+                invalidate_position_cache(symbol, self.api_key)
                 if result and 'orderId' in result:
                     self.log(f"🔴 Đã đóng vị thế {symbol} | Lý do: {reason}")
                     time.sleep(1)
@@ -2104,9 +2089,10 @@ class BaseBot:
     def _open_symbol_position(self, symbol, side, skip_signal_check=False):
         with self.symbol_locks[symbol]:
             try:
-                if has_open_position(symbol, self.api_key, self.api_secret):
-                    self.log(f"⚠️ {symbol} đã có vị thế, không mở thêm")
-                    self.stop_symbol(symbol, failed=True)
+                # Không gọi positionRisk trước mỗi lần mở để tránh spam API.
+                # Khóa symbol + trạng thái local đã đủ để bot không tự mở trùng lệnh.
+                if self.symbol_data.get(symbol, {}).get('position_open'):
+                    self.log(f"⚠️ {symbol} local đang có vị thế, không mở thêm")
                     return False
 
                 # Kiểm tra tín hiệu realtime trước khi vào lệnh (trừ khi skip).
@@ -2175,6 +2161,7 @@ class BaseBot:
                 time.sleep(1)
 
                 result = place_order(symbol, side, qty, self.api_key, self.api_secret)
+                invalidate_position_cache(symbol, self.api_key)
                 if result and 'orderId' in result:
                     executed_qty = float(result.get('executedQty', 0))
                     avg_price = float(result.get('avgPrice', current_price))
@@ -2251,9 +2238,8 @@ class BaseBot:
 
     def _force_check_position(self, symbol):
         try:
-            positions = get_positions(symbol, self.api_key, self.api_secret)
-            if positions and len(positions) > 0:
-                pos = positions[0]
+            pos = get_position_cached(symbol, self.api_key, self.api_secret, ttl=8.0, force=True)
+            if pos:
                 amt = float(pos.get('positionAmt', 0))
                 if abs(amt) > 0:
                     return pos
@@ -2263,19 +2249,15 @@ class BaseBot:
             return None
 
     def _check_symbol_position(self, symbol):
+        """Kiểm tra vị thế thủ công/có cooldown. Không gọi lặp 2 lần để tránh spam API."""
         try:
-            positions = get_positions(symbol, self.api_key, self.api_secret)
-            if not positions or len(positions) == 0:
-                time.sleep(2)
-                positions = get_positions(symbol, self.api_key, self.api_secret)
-            if positions and len(positions) > 0:
-                pos = positions[0]
+            pos = get_position_cached(symbol, self.api_key, self.api_secret, ttl=15.0, force=False)
+            if pos:
                 amt = float(pos.get('positionAmt', 0))
                 if abs(amt) > 0:
                     if not self.symbol_data[symbol]['position_open']:
                         entry_price = float(pos.get('entryPrice', 0))
                         if entry_price == 0:
-                            self.log(f"⚠️ {symbol} - entryPrice = 0, bỏ qua cập nhật")
                             return
                         self.symbol_data[symbol].update({
                             'position_open': True,
@@ -2742,15 +2724,14 @@ class BotManager:
         current_step = user_state.get('step')
 
         strategy_key_map = {
-            '✏️ Entry score': ('entry_score', 'Entry score: điểm tối thiểu để vào lệnh, ví dụ 3'),
-            '✏️ Exit score': ('exit_score', 'Exit score: điểm tối thiểu để đóng/đảo chiều, ví dụ 4'),
-            '✏️ Min progress entry': ('entry_min_progress', 'Min progress entry: phần thời gian nến phải chạy trước khi vào, ví dụ 0.15'),
-            '✏️ Min progress exit': ('exit_min_progress', 'Min progress exit: phần thời gian nến phải chạy trước khi xét thoát, ví dụ 0.10'),
-            '✏️ Projected volume factor': ('projected_volume_factor', 'Projected volume factor: volume dự phóng > vol1 * hệ số, ví dụ 1.20'),
-            '✏️ Body speed factor': ('body_speed_factor', 'Body speed factor: body dự phóng > body1 * hệ số, ví dụ 1.00'),
-            '✏️ Doji ratio': ('doji_ratio', 'Doji ratio: body/range tối thiểu để không coi là doji, ví dụ 0.10'),
-            '✏️ Volume spike factor': ('volume_spike_factor', 'Volume spike factor: vol1 gấp vol2 bao nhiêu lần để bắt đảo chiều, ví dụ 5'),
-            '✏️ Exit persist seconds': ('exit_persist_seconds', 'Exit persist seconds: tín hiệu ngược phải giữ bao nhiêu giây, ví dụ 3'),
+            '✏️ Signal score': ('entry_score', 'Signal score: điểm tối thiểu chung để mở/đóng. Với speed-only nên để 2 để bắt buộc đủ volume speed + body speed.'),
+            '✏️ Entry score': ('entry_score', 'Signal score: điểm tối thiểu chung để mở/đóng. Với speed-only nên để 2.'),
+            '✏️ Exit score': ('exit_score', 'Signal score: điểm tối thiểu chung để mở/đóng. Với speed-only nên để 2.'),
+            '✏️ Min progress': ('entry_min_progress', 'Min progress: phần thời gian nến 1h phải chạy trước khi xét tín hiệu, ví dụ 0.10, 0.15, 0.20'),
+            '✏️ Min progress entry': ('entry_min_progress', 'Min progress: phần thời gian nến 1h phải chạy trước khi xét tín hiệu, ví dụ 0.15'),
+            '✏️ Min progress exit': ('exit_min_progress', 'Min progress: phần thời gian nến 1h phải chạy trước khi xét tín hiệu, ví dụ 0.15'),
+            '✏️ Projected volume factor': ('projected_volume_factor', 'Volume speed: projected_volume > volume nến trước * hệ số, ví dụ 1.20'),
+            '✏️ Body speed factor': ('body_speed_factor', 'Body speed: projected_body > body nến trước * hệ số, ví dụ 1.00'),
         }
 
         if text == "📊 Danh sách Bot":
@@ -2868,7 +2849,7 @@ class BotManager:
                     val = int(val)
                     if val < 1 or val > 5:
                         raise ValueError
-                elif key in ('entry_min_progress', 'exit_min_progress', 'doji_ratio'):
+                elif key in ('entry_min_progress', 'exit_min_progress'):
                     if not (0 < val < 1):
                         raise ValueError
                 elif val <= 0:
@@ -3038,14 +3019,14 @@ class BotManager:
 
             success = self.add_bot(
                 symbol=symbol, lev=leverage, percent=percent, tp=tp, sl=sl,
-                strategy_type="RealtimeStrengthStrategy",
+                strategy_type="SpeedOnly1HStrategy",
                 bot_mode=bot_mode, bot_count=bot_count
             )
 
             if success:
                 success_msg = (
                     f"✅ <b>ĐÃ TẠO BOT REALTIME STRENGTH THÀNH CÔNG</b>\n\n"
-                    f"🤖 Chiến lược: Volume dự phóng + body speed + doji filter + spike reversal\n"
+                    f"🤖 Chiến lược: Speed-only 1H = volume speed + body speed\n"
                     f"🔧 Chế độ: {bot_mode}\n"
                     f"🔢 Số bot: {bot_count}\n"
                     f"💰 Đòn bẩy: {leverage}x\n"
