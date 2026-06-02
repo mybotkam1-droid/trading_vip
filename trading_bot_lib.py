@@ -883,7 +883,7 @@ _STRATEGY_CONFIG = StrategyConfig()
 def get_strategy_config_text():
     c = _STRATEGY_CONFIG.get_all()
     return (
-        "🎯 <b>THAM SỐ CHIẾN LƯỢC 1M/15M SPEED</b>\n\n"
+        "🎯 <b>THAM SỐ CHIẾN LƯỢC 1M/15M SPEED - ĐẢO HƯỚNG</b>\n\n"
         f"• 1m/15m volume factor: {c['closed_1m_vs_15m_factor']:.2f}\n"
         f"• Current/closed volume factor: {c['current_1m_vs_closed_factor']:.2f}\n"
         f"• Min elapsed seconds: {c['min_elapsed_seconds']:.1f}s\n"
@@ -895,8 +895,8 @@ def get_strategy_config_text():
         f"• Max reverse balance %: {c['max_reverse_balance_percent']:.1f}%\n"
         f"• Max reverse count: {int(c['max_reverse_count'])}\n\n"
         "Luồng tín hiệu: 1m đã đóng > tốc độ TB 15m, sau đó 1m hiện tại sau min seconds > 1m đã đóng, "
-        "lọc doji/sideway bằng thân nến, chống đu giá bằng max body, rồi mới lấy hướng nến hiện tại. "
-        "Không dùng phá high/low 3-5 nến để tránh đu breakout muộn. Mở và đảo chiều dùng cùng một tín hiệu."
+        "lọc doji/sideway bằng thân nến, chống đu giá bằng max body, rồi lấy hướng nến hiện tại và ĐẢO NGƯỢC hướng đó. "
+        "Ví dụ nến hiện tại xanh đủ chuẩn => SELL, nến đỏ đủ chuẩn => BUY. Không dùng phá high/low 3-5 nến. Mở và đảo chiều dùng cùng một tín hiệu đảo."
     )
 
 def _candle_direction(open_price, close_price):
@@ -904,6 +904,13 @@ def _candle_direction(open_price, close_price):
         return "BUY"
     if close_price < open_price:
         return "SELL"
+    return None
+
+def _opposite_side(side):
+    if side == "BUY":
+        return "SELL"
+    if side == "SELL":
+        return "BUY"
     return None
 
 def _safe_progress(candle, timeframe_seconds=None):
@@ -959,9 +966,13 @@ def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_cu
         if current_ratio < float(cfg['current_1m_vs_closed_factor']):
             return None, 0, f'current_1m_slow ratio={current_ratio:.2f} need={cfg["current_1m_vs_closed_factor"]:.2f}', False
 
-        side = _candle_direction(float(open_curr), float(current_price))
-        if not side:
+        raw_side = _candle_direction(float(open_curr), float(current_price))
+        if not raw_side:
             return None, 0, 'flat_current', False
+
+        # Chế độ đảo tín hiệu: nến hiện tại xanh mạnh => SELL, nến hiện tại đỏ mạnh => BUY.
+        # Lý do: tín hiệu tốc độ/volume mạnh hiện tại đang được dùng như dấu hiệu quá đà ngắn hạn.
+        side = _opposite_side(raw_side)
 
         candle_range = max(float(high_curr) - float(low_curr), 0.0)
         if candle_range <= 0:
@@ -986,7 +997,8 @@ def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_cu
             return None, 0, f'current_body_too_large body0={body0:.8f} max={max_body_allow:.8f}', False
 
         reason = (
-            f'1m15m_speed+current_speed+doji_sideway_ok | elapsed={elapsed:.1f}s '
+            f'1m15m_speed_REVERSED+current_speed+doji_sideway_ok | elapsed={elapsed:.1f}s '
+            f'raw_side={raw_side} reversed_signal={side} '
             f'closed_ratio={closed_ratio:.2f} current_ratio={current_ratio:.2f} '
             f'projected_vol0={projected_vol0:.4f} vol1m={prev1_vol:.4f} avg15m_per_min={avg_vol_15_per_min:.4f} '
             f'body_ratio={body_ratio:.2f} body0={body0:.8f} prev1_body={prev1_body:.8f} '
