@@ -891,7 +891,7 @@ def get_strategy_config_text():
         f"• Low volume filter: {'ON' if c.get('low_volume_filter_enabled', 1.0) >= 0.5 else 'OFF'} | min 24h volume: {c.get('min_24h_volume', 0):,.0f}\n"
         f"• Hút lực từ đỉnh: {'ON' if float(c.get('profit_protect_enabled', 1.0)) >= 0.5 else 'OFF'} | start {c.get('profit_protect_start_roi', 10.0):.1f}% ROI | tụt {c.get('profit_protect_pullback_roi', 8.0):.1f}% ROI thì đóng\n\n"
         "💰 <b>QUẢN LÝ VỐN</b>\n"
-        "• Mỗi lệnh, kể cả đảo chiều: tính theo % số dư margin/khả dụng hiện tại.\n"
+        "• Mỗi lệnh, kể cả đảo chiều: tính theo % số dư margin hiện tại.\n"
         "• Không dùng vốn lệnh trước * hệ số khi đảo chiều nữa.\n\n"
         "Luồng tín hiệu:\n"
         "1) Lấy 5 nến đã đóng gần nhất C1..C5 và nến hiện tại C6 theo khung đã chọn.\n"
@@ -2294,22 +2294,24 @@ class BaseBot:
                     return False
 
                 total_balance, available_balance = get_total_and_available_balance(self.api_key, self.api_secret)
-                if total_balance is None or total_balance <= 0:
-                    self.log(f"❌ {symbol} - Không thể lấy tổng số dư")
+                margin_balance = get_margin_balance(self.api_key, self.api_secret)
+                if margin_balance is None or margin_balance <= 0:
+                    self.log(f"❌ {symbol} - Không thể lấy số dư margin")
                     self.stop_symbol(symbol, failed=True)
                     return False
 
-                # Vốn mới: mọi lệnh, kể cả đảo chiều, đều lấy theo % số dư margin/khả dụng hiện tại.
-                required_usd = available_balance * (self.percent / 100)
-                sizing_label = f"{self.percent}% số dư khả dụng hiện tại"
+                # Vốn mới: mọi lệnh, kể cả đảo chiều, đều lấy theo % SỐ DƯ MARGIN.
+                # Không dùng % số dư khả dụng làm nền tính vốn nữa.
+                required_usd = margin_balance * (self.percent / 100)
+                sizing_label = f"{self.percent}% số dư margin hiện tại"
 
                 if required_usd <= 0:
                     self.log(f"❌ {symbol} - Vốn vào lệnh quá nhỏ ({required_usd:.2f})")
                     self.stop_symbol(symbol, failed=True)
                     return False
 
-                if required_usd > available_balance:
-                    self.log(f"⚠️ {symbol} - Vốn yêu cầu ({required_usd:.2f}) > số dư khả dụng ({available_balance:.2f}), vẫn thử lệnh...")
+                if available_balance is not None and required_usd > available_balance:
+                    self.log(f"⚠️ {symbol} - Vốn tính theo margin ({required_usd:.2f}) > số dư khả dụng ({available_balance:.2f}), vẫn thử lệnh theo yêu cầu margin...")
 
                 current_price = self._get_fresh_price(symbol)
                 if current_price <= 0:
