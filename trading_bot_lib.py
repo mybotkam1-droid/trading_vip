@@ -263,89 +263,21 @@ def create_strategy_config_keyboard():
     return {
         "keyboard": [
             [{"text": "📊 Xem tham số chiến lược"}],
-            [{"text": "✏️ Signal timeframe"}, {"text": "✏️ Market timeframe"}],
-            [{"text": "✏️ Trend speed Y"}, {"text": "✏️ Climax speed X"}],
-            [{"text": "✏️ Market body ratio"}, {"text": "✏️ Min elapsed seconds"}],
-            [{"text": "✏️ EMA fast"}, {"text": "✏️ EMA slow"}],
-            [{"text": "✏️ EMA gap min %"}, {"text": "✏️ RSI period"}],
-            [{"text": "✏️ RSI trend BUY"}, {"text": "✏️ RSI trend SELL"}],
-            [{"text": "✏️ RSI climax OB"}, {"text": "✏️ RSI climax OS"}],
-            [{"text": "✏️ Use EMA/RSI"}],
-            [{"text": "✏️ Reverse capital multiplier"}, {"text": "✏️ Max reverse balance %"}],
-            [{"text": "✏️ Max reverse count"}],
-            [{"text": "✏️ Profit protect ON/OFF"}],
-            [{"text": "✏️ Profit start ROI"}, {"text": "✏️ Profit pullback ROI"}],
-            [{"text": "🔄 Reset chiến lược"}],
-            [{"text": "❌ Hủy bỏ"}]
-        ],
-        "resize_keyboard": True, "one_time_keyboard": True
-    }
-
-def create_strategy_value_keyboard():
-    return {
-        "keyboard": [
-            [{"text": "1m"}, {"text": "3m"}, {"text": "5m"}, {"text": "15m"}],
-            [{"text": "30m"}, {"text": "1h"}, {"text": "2h"}, {"text": "4h"}],
-            [{"text": "6"}, {"text": "10"}, {"text": "15"}],
-            [{"text": "1.10"}, {"text": "1.20"}, {"text": "1.50"}, {"text": "2.00"}],
-            [{"text": "2.50"}, {"text": "3.00"}, {"text": "4.00"}, {"text": "5.00"}],
-            [{"text": "0.15"}, {"text": "0.25"}, {"text": "0.35"}],
-            [{"text": "9"}, {"text": "14"}, {"text": "21"}, {"text": "34"}],
-            [{"text": "0"}, {"text": "0.03"}, {"text": "0.05"}, {"text": "0.10"}],
-            [{"text": "30"}, {"text": "40"}, {"text": "45"}, {"text": "55"}, {"text": "60"}, {"text": "70"}],
-            [{"text": "1.0"}, {"text": "1.3"}, {"text": "1.5"}],
-            [{"text": "❌ Hủy bỏ"}]
-        ],
-        "resize_keyboard": True, "one_time_keyboard": True
-    }
-
-def create_max_price_buy_keyboard():
-    return {
-        "keyboard": [
-            [{"text": "1.0"}, {"text": "2.0"}, {"text": "5.0"}],
-            [{"text": "10.0"}, {"text": "20.0"}, {"text": "50.0"}],
-            [{"text": "❌ Bỏ qua"}],
+            [{"text": "✏️ Signal timeframe"}, {"text": "✏️ Min elapsed seconds"}],
+            [{"text": "✏️ Body ratio min"}, {"text": "✏️ Speed edge tolerance"}],
+            [{"text": "✏️ Current vs low"}, {"text": "✏️ Strong decline factor"}],
+            [{"text": "✏️ Current vs recent"}, {"text": "✏️ Choppy pattern"}],
+            [{"text": "✏️ Peak pullback"}, {"text": "✏️ Low volume filter"}],
+            [{"text": "✏️ Min 24h volume"}],
+            [{"text": "✏️ Profit protect ON/OFF"}, {"text": "✏️ Profit start ROI"}],
+            [{"text": "✏️ Profit pullback ROI"}],
+            [{"text": "♻️ Reset tham số chiến lược"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
         "resize_keyboard": True,
-        "one_time_keyboard": True
+        "one_time_keyboard": False
     }
 
-def create_max_volume_buy_keyboard():
-    return {
-        "keyboard": [
-            [{"text": "1000000"}, {"text": "5000000"}, {"text": "10000000"}],
-            [{"text": "50000000"}, {"text": "100000000"}, {"text": "500000000"}],
-            [{"text": "❌ Bỏ qua"}],
-            [{"text": "❌ Hủy bỏ"}]
-        ],
-        "resize_keyboard": True,
-        "one_time_keyboard": True
-    }
-
-def create_min_price_sell_keyboard():
-    return {
-        "keyboard": [
-            [{"text": "10"}, {"text": "50"}, {"text": "100"}],
-            [{"text": "500"}, {"text": "1000"}, {"text": "5000"}],
-            [{"text": "❌ Bỏ qua"}],
-            [{"text": "❌ Hủy bỏ"}]
-        ],
-        "resize_keyboard": True,
-        "one_time_keyboard": True
-    }
-
-def create_min_volume_sell_keyboard():
-    return {
-        "keyboard": [
-            [{"text": "1000000"}, {"text": "5000000"}, {"text": "10000000"}],
-            [{"text": "50000000"}, {"text": "100000000"}, {"text": "500000000"}],
-            [{"text": "❌ Bỏ qua"}],
-            [{"text": "❌ Hủy bỏ"}]
-        ],
-        "resize_keyboard": True,
-        "one_time_keyboard": True
-    }
 
 # ========== HÀM API BINANCE (giữ nguyên) ==========
 def _wait_for_rate_limit():
@@ -843,23 +775,39 @@ def _interval_seconds(interval=None):
     return float(_BINANCE_INTERVAL_SECONDS.get(_normalize_interval(interval), 60.0))
 
 class StrategyConfig:
-    """Cấu hình chiến lược: tốc độ nến nhỏ + khung thị trường, giữ nguyên quản lý vốn đảo chiều."""
+    """Cấu hình chiến lược SPEED PATTERN: 5 nến đã đóng + nến hiện tại, vốn theo % số dư margin."""
     DEFAULTS = {
-        # Khung nến dùng để đo tốc độ: nến hiện tại đang chạy so với nến đã đóng gần nhất.
+        # Khung nến dùng cho cả 5 nến đã đóng và nến hiện tại.
         'signal_interval': '1m',
         'timeframe_seconds': 60.0,
-        # Khung thị trường dùng để phân loại SIDEWAY / TRENDING / CLIMAX.
-        'market_interval': '1m',
-        # Chờ nến tín hiệu chạy đủ số giây tối thiểu để tránh tốc độ tức thì bị phóng đại.
+        # Chờ nến hiện tại chạy đủ để tránh tốc độ tức thì bị phóng đại.
         'min_elapsed_seconds': 6.0,
-        # TRENDING: nếu speed ratio >= Y thì vào theo hướng thị trường.
+        # Lọc nến sideway/doji: body / range phải đủ lớn.
+        'body_ratio_min': 0.25,
+        # Sai số khi xét C1 cao nhất, C5 thấp nhất hoặc C4 cao nhất.
+        'speed_edge_tolerance': 0.05,
+        # C6 phải nhanh hơn C5 tối thiểu bao nhiêu lần.
+        'current_vs_low_factor': 1.20,
+        # Nếu 5 nến trước giảm mạnh, C6 phải nhanh hơn cả C4 và C5.
+        'strong_decline_factor': 2.00,
+        'current_vs_recent_factor': 1.00,
+        # Nhấp nhô: chỉ vào khi C6 nhanh hơn C4+C5 và ngược hướng đa số 5 nến trước.
+        'choppy_pattern_enabled': 1.0,
+        # Tăng tốc quá nhanh rồi C5 giảm: chỉ vào khi C6 ngược hướng đa số 5 nến trước.
+        'peak_pullback_enabled': 1.0,
+        # Lọc coin volume 24h thấp để tránh coin rác/low liquidity.
+        'low_volume_filter_enabled': 1.0,
+        'min_24h_volume': 10000000.0,
+        # Bảo vệ lợi nhuận giữ lại để tránh đang lãi thành lỗ.
+        'profit_protect_enabled': 1.0,
+        'profit_protect_start_roi': 10.0,
+        'profit_protect_pullback_roi': 8.0,
+        # Giữ các key cũ để không vỡ state/menu cũ nhưng không dùng trong chiến lược mới.
+        'market_interval': '1m',
         'trend_speed_factor': 1.62,
-        # CLIMAX: nếu speed ratio >= X thì vào ngược hướng thị trường. X nên lớn hơn Y.
         'climax_speed_factor': 4.00,
-        # Nếu nến thị trường có thân quá nhỏ so với range thì coi là sideway và không vào.
         'market_body_ratio_min': 0.20,
-        # Bộ lọc thị trường bằng chỉ báo: EMA + RSI.
-        'use_market_indicators': 1.0,
+        'use_market_indicators': 0.0,
         'ema_fast_period': 9,
         'ema_slow_period': 21,
         'ema_gap_min_pct': 0.03,
@@ -868,24 +816,9 @@ class StrategyConfig:
         'rsi_trend_sell_max': 40.0,
         'rsi_climax_overbought': 80.0,
         'rsi_climax_oversold': 20.0,
-        # Giữ các key cũ để không vỡ state/menu cũ. current_vs_closed_factor ánh xạ về trend_speed_factor.
-        'current_vs_closed_factor': 1.20,
-        'closed_1m_vs_15m_factor': 1.5,
-        'current_1m_vs_closed_factor': 1.2,
-        'breakout_lookback': 0,
-        'body_ratio_min': 0.0,
-        'min_current_body_factor': 0.0,
-        'max_chase_body_factor': 999999.0,
-        'close_position_buy': 0.65,
-        'close_position_sell': 0.35,
-        # Quản lý vốn đảo chiều - GIỮ NGUYÊN.
-        'reverse_capital_multiplier': 1.10,
-        'max_reverse_balance_percent': 90.0,
+        'reverse_capital_multiplier': 1.0,
+        'max_reverse_balance_percent': 100.0,
         'max_reverse_count': 10,
-        # Bảo vệ lợi nhuận: khi ROI từng đạt đỉnh rồi tụt xuống đủ sâu thì đóng, không đảo.
-        'profit_protect_enabled': 1.0,
-        'profit_protect_start_roi': 10.0,
-        'profit_protect_pullback_roi': 8.0,
         'entry_score': 1,
         'exit_score': 1,
         'entry_min_progress': 0.10,
@@ -896,6 +829,13 @@ class StrategyConfig:
         'volume_spike_factor': 5.0,
         'exit_persist_seconds': 0.0,
         'max_body_avg_factor': 999999.0,
+        'closed_1m_vs_15m_factor': 1.5,
+        'current_1m_vs_closed_factor': 1.2,
+        'breakout_lookback': 0,
+        'min_current_body_factor': 0.0,
+        'max_chase_body_factor': 999999.0,
+        'close_position_buy': 0.65,
+        'close_position_sell': 0.35,
     }
     INT_KEYS = {'entry_score', 'exit_score', 'breakout_lookback', 'max_reverse_count', 'ema_fast_period', 'ema_slow_period', 'rsi_period'}
     STRING_KEYS = {'signal_interval', 'market_interval'}
@@ -919,7 +859,7 @@ class StrategyConfig:
                     if key in self.STRING_KEYS:
                         value = _normalize_interval(value)
                         self._config[key] = value
-                        if key in ('signal_interval', 'market_interval'):
+                        if key == 'signal_interval':
                             self._config['timeframe_seconds'] = _interval_seconds(value)
                     elif key in self.INT_KEYS:
                         self._config[key] = int(float(value))
@@ -937,31 +877,30 @@ _STRATEGY_CONFIG = StrategyConfig()
 def get_strategy_config_text():
     c = _STRATEGY_CONFIG.get_all()
     signal_interval = _normalize_interval(c.get('signal_interval', '1m'))
-    market_interval = _normalize_interval(c.get('market_interval', '15m'))
     return (
-        "🎯 <b>THAM SỐ CHIẾN LƯỢC MARKET REGIME + SPEED</b>\n\n"
+        "🎯 <b>THAM SỐ CHIẾN LƯỢC SPEED PATTERN 5+1</b>\n\n"
         f"• Signal timeframe: {signal_interval} ({_interval_seconds(signal_interval):.0f}s)\n"
-        f"• Market timeframe: {market_interval} ({_interval_seconds(market_interval):.0f}s)\n"
         f"• Min elapsed seconds: {c['min_elapsed_seconds']:.1f}s\n"
-        f"• Trend speed factor Y: {c['trend_speed_factor']:.2f}x\n"
-        f"• Climax speed factor X: {c['climax_speed_factor']:.2f}x\n"
-        f"• Market body ratio min: {c['market_body_ratio_min']:.2f}\n"
-        f"• Use EMA/RSI filter: {'ON' if float(c.get('use_market_indicators', 1.0)) >= 0.5 else 'OFF'}\n"
-        f"• EMA fast/slow: {int(c.get('ema_fast_period', 9))}/{int(c.get('ema_slow_period', 21))} | gap min: {c.get('ema_gap_min_pct', 0.03):.3f}%\n"
-        f"• RSI period: {int(c.get('rsi_period', 14))} | trend BUY≥{c.get('rsi_trend_buy_min', 55):.1f} SELL≤{c.get('rsi_trend_sell_max', 45):.1f}\n"
-        f"• RSI climax OB/OS: {c.get('rsi_climax_overbought', 80):.1f}/{c.get('rsi_climax_oversold', 20):.1f}\n"
+        f"• Body ratio min: {c['body_ratio_min']:.2f}\n"
+        f"• Speed edge tolerance: {c['speed_edge_tolerance']:.2f}\n"
+        f"• Current vs low factor: {c['current_vs_low_factor']:.2f}x\n"
+        f"• Strong decline factor: {c['strong_decline_factor']:.2f}x\n"
+        f"• Current vs recent factor: {c['current_vs_recent_factor']:.2f}x\n"
+        f"• Peak pullback: {'ON' if c.get('peak_pullback_enabled', 1.0) >= 0.5 else 'OFF'}\n"
+        f"• Choppy pattern: {'ON' if c.get('choppy_pattern_enabled', 1.0) >= 0.5 else 'OFF'}\n"
+        f"• Low volume filter: {'ON' if c.get('low_volume_filter_enabled', 1.0) >= 0.5 else 'OFF'} | min 24h volume: {c.get('min_24h_volume', 0):,.0f}\n"
         f"• Hút lực từ đỉnh: {'ON' if float(c.get('profit_protect_enabled', 1.0)) >= 0.5 else 'OFF'} | start {c.get('profit_protect_start_roi', 10.0):.1f}% ROI | tụt {c.get('profit_protect_pullback_roi', 8.0):.1f}% ROI thì đóng\n\n"
-        "💰 <b>QUẢN LÝ VỐN ĐẢO CHIỀU</b>\n"
-        f"• Reverse capital multiplier: {c['reverse_capital_multiplier']:.2f}\n"
-        f"• Max reverse balance %: {c['max_reverse_balance_percent']:.1f}%\n"
-        f"• Max reverse count: {int(c['max_reverse_count'])}\n\n"
-        "Luồng tín hiệu: chỉ đo tốc độ volume của nến signal hiện tại so với nến signal đã đóng gần nhất, "
-        "không dùng màu của 2 nến gần nhất để quyết định hướng. Nếu khung thị trường sideway thì không vào. "
-        "Nếu EMA/RSI bật, market phải được xác nhận bởi EMA fast/slow + RSI; không rõ thì coi là sideway và bỏ qua. "
-        "Nếu speed ratio >= X và RSI đạt vùng quá mua/quá bán thì coi là CLIMAX và vào NGƯỢC hướng thị trường. "
-        "Nếu speed ratio >= Y và EMA/RSI xác nhận trend thì coi là TRENDING và vào THEO hướng thị trường. X/Y chỉnh riêng."
+        "💰 <b>QUẢN LÝ VỐN</b>\n"
+        "• Mỗi lệnh, kể cả đảo chiều: tính theo % số dư margin/khả dụng hiện tại.\n"
+        "• Không dùng vốn lệnh trước * hệ số khi đảo chiều nữa.\n\n"
+        "Luồng tín hiệu:\n"
+        "1) Lấy 5 nến đã đóng gần nhất C1..C5 và nến hiện tại C6 theo khung đã chọn.\n"
+        "2) C5 và C6 phải không sideway/doji.\n"
+        "3) Case giảm tốc: C1 là vùng tốc độ cao nhất, C5 là thấp nhất; C6 tăng tốc lại từ C5, nếu giảm mạnh thì C6 phải nhanh hơn cả C4 và C5.\n"
+        "4) Case tăng tốc rồi hụt: C4 là vùng cao nhất, C5 giảm, C6 tăng lại và ngược hướng đa số C1..C5.\n"
+        "5) Case nhấp nhô: mặc định chỉ vào khi C6 nhanh hơn C4+C5 và ngược hướng đa số C1..C5.\n"
+        "6) Tất cả trường hợp đạt đều vào theo hướng nến C6."
     )
-
 def _candle_direction(open_price, close_price):
     if close_price > open_price:
         return "BUY"
@@ -1032,6 +971,59 @@ def _rsi(values, period=14):
         return None
 
 
+
+def _is_not_sideway_candle(open_price, close_price, high_price, low_price, min_body_ratio=None):
+    try:
+        min_body_ratio = float(_STRATEGY_CONFIG.get('body_ratio_min', 0.25) if min_body_ratio is None else min_body_ratio)
+        rng = float(high_price) - float(low_price)
+        if rng <= 0:
+            return False, 0.0
+        body_ratio = abs(float(close_price) - float(open_price)) / rng
+        return body_ratio >= min_body_ratio, body_ratio
+    except Exception:
+        return False, 0.0
+
+
+def _history_candle_direction(candle):
+    try:
+        o = _candle_get(candle, 'open', 1)
+        c = _candle_get(candle, 'close', 4)
+        return _candle_direction(o, c)
+    except Exception:
+        return None
+
+
+def _majority_direction(candles):
+    buys = 0
+    sells = 0
+    for c in candles:
+        d = _history_candle_direction(c)
+        if d == 'BUY':
+            buys += 1
+        elif d == 'SELL':
+            sells += 1
+    if buys > sells:
+        return 'BUY'
+    if sells > buys:
+        return 'SELL'
+    return None
+
+
+def _volume_speed(candle):
+    return max(0.0, _candle_get(candle, 'volume', 5))
+
+
+def _near_highest(value, values, tolerance):
+    if not values:
+        return False
+    return float(value) >= max(values) * (1.0 - float(tolerance))
+
+
+def _near_lowest(value, values, tolerance):
+    if not values:
+        return False
+    return float(value) <= min(values) * (1.0 + float(tolerance))
+
 def _market_context_from_candle(market_candle, market_history=None):
     """Trả về dict market context theo nến market + EMA + RSI."""
     try:
@@ -1095,83 +1087,95 @@ def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_cu
                         prev_candle, market_candle=None, progress=1.0,
                         mode='entry', recent_1m_history=None, market_history=None):
     """
-    Chiến lược MARKET REGIME + SPEED:
-    - Chỉ đo tốc độ volume của nến signal hiện tại so với nến signal đã đóng gần nhất.
-    - Bỏ qua màu/hướng của 2 nến signal gần nhất khi quyết định BUY/SELL.
-    - Hướng cuối cùng lấy theo khung thị trường:
-        + SIDEWAY: không vào.
-        + CLIMAX: nếu speed ratio >= X thì vào ngược hướng thị trường.
-        + TRENDING: nếu speed ratio >= Y thì vào theo hướng thị trường.
+    Chiến lược SPEED PATTERN 5+1:
+    - C1..C5: 5 nến đã đóng gần nhất theo signal_interval, C5 là nến gần nhất.
+    - C6: nến hiện tại đang chạy, tốc độ = volume hiện tại / progress.
+    - Không dùng EMA/RSI/market regime.
+    - C5 và C6 phải không sideway/doji.
+    - Case A: C1 cao nhất, C5 thấp nhất => giảm tốc tổng thể; C6 tăng tốc lại => vào theo C6.
+      Nếu giảm rất mạnh thì C6 phải nhanh hơn cả C4 và C5.
+    - Case B: C4 là vùng cao nhất, C5 bắt đầu giảm, C6 tăng lại và ngược hướng đa số C1..C5 => vào theo C6.
+    - Case C: tốc độ nhấp nhô, chỉ vào nếu C6 nhanh hơn C4+C5 và ngược hướng đa số C1..C5.
     """
     try:
         cfg = _STRATEGY_CONFIG.get_all()
         signal_interval = _normalize_interval(cfg.get('signal_interval', '1m'))
-        market_interval = _normalize_interval(cfg.get('market_interval', '15m'))
         tf_seconds = _interval_seconds(signal_interval)
         progress = max(float(progress), 0.001)
         elapsed = progress * tf_seconds
         if elapsed < float(cfg['min_elapsed_seconds']):
             return None, 0, f'elapsed_too_early_{elapsed:.1f}s need={cfg["min_elapsed_seconds"]:.1f}s', False
 
-        prev_vol = _candle_get(prev_candle, 'volume', 5)
-        if prev_vol <= 0:
-            return None, 0, 'bad_prev_volume', False
+        history = list(recent_1m_history or [])
+        if len(history) < 5:
+            return None, 0, f'missing_closed_history len={len(history)} need=5', False
+        closed5 = history[-5:]
+        c1, c2, c3, c4, c5 = closed5
+        speeds = [_volume_speed(c) for c in closed5]
+        if any(s <= 0 for s in speeds):
+            return None, 0, 'bad_closed_speed', False
 
-        projected_vol0 = float(volume_curr) / progress
-        speed_ratio = projected_vol0 / max(prev_vol, 1e-12)
+        current_speed = float(volume_curr) / progress
+        if current_speed <= 0:
+            return None, 0, 'bad_current_speed', False
 
-        market_ctx = _market_context_from_candle(market_candle, market_history=market_history)
-        market_side = market_ctx.get('side')
-        market_body_ratio = float(market_ctx.get('body_ratio') or 0.0)
-        market_reason = market_ctx.get('reason')
-        market_body_min = float(cfg.get('market_body_ratio_min', 0.25))
-        if not market_side:
-            return None, 0, f'market_sideway_or_invalid reason={market_reason}', False
-        if market_body_ratio < market_body_min:
-            return None, 0, f'market_body_sideway body_ratio={market_body_ratio:.2f} need={market_body_min:.2f}', False
+        current_side = _candle_direction(float(open_curr), float(current_price))
+        if not current_side:
+            return None, 0, 'current_flat_no_direction', False
 
-        trend_factor = float(cfg.get('trend_speed_factor', cfg.get('current_vs_closed_factor', 1.2)))
-        climax_factor = float(cfg.get('climax_speed_factor', 3.0))
-        if climax_factor < trend_factor:
-            # Tự bảo vệ nếu người dùng nhập X < Y: ép climax >= trend.
-            climax_factor = trend_factor
+        ok5, body5 = _is_not_sideway_candle(_candle_get(c5, 'open', 1), _candle_get(c5, 'close', 4), _candle_get(c5, 'high', 2), _candle_get(c5, 'low', 3))
+        ok6, body6 = _is_not_sideway_candle(open_curr, current_price, high_curr, low_curr)
+        if not ok5:
+            return None, 0, f'c5_sideway body_ratio={body5:.2f}', False
+        if not ok6:
+            return None, 0, f'c6_sideway body_ratio={body6:.2f}', False
 
-        rsi_val = market_ctx.get('rsi')
-        overbought = float(cfg.get('rsi_climax_overbought', 70.0))
-        oversold = float(cfg.get('rsi_climax_oversold', 30.0))
-        climax_confirmed = False
-        if speed_ratio >= climax_factor:
-            if float(cfg.get('use_market_indicators', 1.0)) < 0.5 or rsi_val is None:
-                climax_confirmed = True
-            elif market_side == 'BUY' and float(rsi_val) >= overbought:
-                climax_confirmed = True
-            elif market_side == 'SELL' and float(rsi_val) <= oversold:
-                climax_confirmed = True
+        tol = float(cfg.get('speed_edge_tolerance', 0.05))
+        current_vs_low = float(cfg.get('current_vs_low_factor', 1.20))
+        strong_decline_factor = float(cfg.get('strong_decline_factor', 2.0))
+        current_vs_recent = float(cfg.get('current_vs_recent_factor', 1.0))
+        majority = _majority_direction(closed5)
+        opposite_majority = _opposite_side(majority) if majority else None
 
-        if climax_confirmed:
-            side = _opposite_side(market_side)
-            regime = 'CLIMAX_REVERSE'
-            is_spike = True
-            score = 2
-        elif speed_ratio >= trend_factor:
-            side = market_side
-            regime = 'TRENDING_FOLLOW'
-            is_spike = False
-            score = 1
-        else:
-            return None, 0, f'speed_slow ratio={speed_ratio:.2f} trend_need={trend_factor:.2f} climax_need={climax_factor:.2f}', False
+        s1, s2, s3, s4, s5 = speeds
+        case = None
+        need_speed = None
+
+        # Case A: giảm tốc tổng thể. Không cần C1>C2>C3>C4>C5 tuyệt đối, chỉ cần C1 vùng cao nhất và C5 vùng thấp nhất.
+        decreasing_structure = _near_highest(s1, speeds, tol) and _near_lowest(s5, speeds, tol)
+        if decreasing_structure:
+            if s1 / max(s5, 1e-12) >= strong_decline_factor:
+                need_speed = max(s4, s5) * current_vs_recent
+            else:
+                need_speed = s5 * current_vs_low
+            if current_speed > need_speed:
+                case = 'DECREASE_LOW_REBOUND'
+
+        # Case B: tăng tốc mạnh rồi C5 hụt, C6 tăng lại và ngược hướng đa số C1..C5.
+        if case is None and float(cfg.get('peak_pullback_enabled', 1.0)) >= 0.5:
+            peak_pullback = _near_highest(s4, speeds, tol) and s5 < s4 and current_speed > s5 * current_vs_low
+            if peak_pullback and opposite_majority and current_side == opposite_majority:
+                case = 'PEAK_PULLBACK_REVERSE_MAJORITY'
+
+        # Case C: tốc độ lộn xộn/nhấp nhô. Mặc định chỉ vào nếu C6 mạnh hơn C4+C5 và ngược hướng đa số.
+        if case is None and float(cfg.get('choppy_pattern_enabled', 1.0)) >= 0.5:
+            if current_speed > max(s4, s5) * current_vs_recent and opposite_majority and current_side == opposite_majority:
+                case = 'CHOPPY_REVERSE_MAJORITY_STRONG_C6'
+
+        if case is None:
+            return None, 0, (
+                f'no_speed_pattern speeds={[round(x, 4) for x in speeds]} c6={current_speed:.4f} '
+                f'majority={majority} current={current_side}'
+            ), False
 
         reason = (
-            f'market_regime_speed_ok | regime={regime} signal_interval={signal_interval} market_interval={market_interval} '
-            f'elapsed={elapsed:.1f}s progress={progress:.3f} speed_ratio={speed_ratio:.2f} '
-            f'trend_Y={trend_factor:.2f} climax_X={climax_factor:.2f} '
-            f'market_side={market_side} market_reason={market_reason} market_body_ratio={market_body_ratio:.2f} '
-            f"rsi={market_ctx.get('rsi')} ema_gap_pct={market_ctx.get('ema_gap_pct')} final_signal={side} "
-            f'projected_vol0={projected_vol0:.4f} prev_vol={prev_vol:.4f}'
+            f'speed_pattern_ok | case={case} interval={signal_interval} elapsed={elapsed:.1f}s progress={progress:.3f} '
+            f'speeds={[round(x, 4) for x in speeds]} c6_speed={current_speed:.4f} '
+            f'body5={body5:.2f} body6={body6:.2f} majority={majority} final_signal={current_side}'
         )
-        return side, score, reason, is_spike
+        return current_side, 1, reason, False
     except Exception as e:
-        logger.error(f"Lỗi chấm điểm tín hiệu market-regime speed: {e}")
+        logger.error(f"Lỗi chấm điểm tín hiệu speed pattern: {e}")
         return None, 0, 'error', False
 
 
@@ -1186,47 +1190,33 @@ def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
 
 
 def _fetch_market_candle(symbol):
-    """Lấy nến market + lịch sử đủ để tính EMA/RSI."""
-    try:
-        cfg = _STRATEGY_CONFIG.get_all()
-        interval = _normalize_interval(cfg.get('market_interval', '15m'))
-        limit = max(int(cfg.get('ema_slow_period', 21)) + int(cfg.get('rsi_period', 14)) + 10, 60)
-        url = "https://fapi.binance.com/fapi/v1/klines"
-        data = binance_api_request(url, params={"symbol": symbol.upper(), "interval": interval, "limit": limit})
-        if not data or len(data) < 1:
-            return None
-        candle = _kline_to_candle_dict(data[-1], symbol, interval, is_final=False)
-        candle['history'] = data
-        return candle
-    except Exception as e:
-        logger.error(f"Lỗi REST lấy nến market {symbol}: {e}")
-        return None
+    """Chiến lược mới không dùng market timeframe/EMA/RSI."""
+    return None
 
 
 def _fetch_rest_1m15m_signal_data(symbol):
-    """Tên cũ giữ để tương thích: lấy current + previous của signal_interval và current của market_interval."""
+    """Tên cũ giữ để tương thích: lấy current + previous + 5 nến đóng theo signal_interval."""
     try:
         cfg = _STRATEGY_CONFIG.get_all()
         signal_interval = _normalize_interval(cfg.get('signal_interval', '1m'))
-        market_interval = _normalize_interval(cfg.get('market_interval', '15m'))
+        symbol = symbol.upper()
+        now = time.time()
+        key = (symbol, signal_interval)
+        cached = _SIGNAL_DATA_CACHE.get(key)
+        if cached and now - cached.get('ts', 0) < _SIGNAL_DATA_CACHE_TTL:
+            return cached['data']
         url = "https://fapi.binance.com/fapi/v1/klines"
-        data = binance_api_request(url, params={"symbol": symbol.upper(), "interval": signal_interval, "limit": 2})
-        if not data or len(data) < 2:
+        data = binance_api_request(url, params={"symbol": symbol, "interval": signal_interval, "limit": 6})
+        if not data or len(data) < 6:
             return None, None, None, []
         curr = data[-1]
-        prev = data[-2]
-        market_history = []
-        if market_interval == signal_interval:
-            market = curr
-            market_history = data
-        else:
-            m_limit = max(int(_STRATEGY_CONFIG.get('ema_slow_period', 21)) + int(_STRATEGY_CONFIG.get('rsi_period', 14)) + 10, 60)
-            mdata = binance_api_request(url, params={"symbol": symbol.upper(), "interval": market_interval, "limit": m_limit})
-            market = mdata[-1] if mdata else None
-            market_history = mdata or []
-        return curr, prev, market, market_history
+        closed5 = data[-6:-1]
+        prev = closed5[-1]
+        result = (curr, prev, None, closed5)
+        _SIGNAL_DATA_CACHE[key] = {'ts': now, 'data': result}
+        return result
     except Exception as e:
-        logger.error(f"Lỗi REST lấy dữ liệu market-regime speed {symbol}: {e}")
+        logger.error(f"Lỗi REST lấy dữ liệu speed pattern {symbol}: {e}")
         return None, None, None, []
 
 
@@ -1483,6 +1473,10 @@ class SmartCoinFinder:
                     continue
                 if excluded_coins and symbol in excluded_coins:
                     continue
+                if float(_STRATEGY_CONFIG.get('low_volume_filter_enabled', 1.0)) >= 0.5:
+                    min_vol = float(_STRATEGY_CONFIG.get('min_24h_volume', 0.0))
+                    if float(coin.get('volume', 0.0) or 0.0) < min_vol:
+                        continue
                 if self._bot_manager and self._bot_manager.bot_coordinator.is_temp_blacklisted(symbol):
                     continue
                 # Không gọi positionRisk cho từng coin khi quét, tránh spam Binance/BadRequest.
@@ -1815,7 +1809,7 @@ class BaseBot:
 
         tp_sl_info = f" | TP: {self.tp}%" if self.tp else " | TP: Tắt"
         tp_sl_info += f" | SL: {self.sl}%" if self.sl else " | SL: Tắt"
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: market regime + speed | Đảo chiều khi tín hiệu ngược đủ chuẩn{tp_sl_info}")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: speed pattern 5+1 | Đảo chiều khi tín hiệu ngược đủ chuẩn{tp_sl_info}")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1979,7 +1973,7 @@ class BaseBot:
             return
 
         prev = candle.get('prev_for_signal') or (self.kline_manager.get_prev_candle(symbol) if self.kline_manager else None)
-        history = []
+        _, _, _, history = _fetch_rest_1m15m_signal_data(symbol)
         if prev is None:
             self.realtime_signal[symbol] = None
             self.last_signal_time[symbol] = time.time()
@@ -2054,8 +2048,8 @@ class BaseBot:
                     self.symbol_data[symbol]['realtime_signal'] = None
                 return details if return_details else None
 
-            market_candle = _fetch_market_candle(symbol)
-            details = self._compute_signal_from_candle(candle, prev, market_candle, mode=mode, return_details=True, recent_1m_history=[])
+            _, _, _, closed_history = _fetch_rest_1m15m_signal_data(symbol)
+            details = self._compute_signal_from_candle(candle, prev, None, mode=mode, return_details=True, recent_1m_history=closed_history)
             signal = details.get('signal')
 
             self.realtime_signal[symbol] = signal
@@ -2249,8 +2243,7 @@ class BaseBot:
                             self.log(f"⛔ {symbol} đã đảo {prev_reverse_count} lần liên tiếp, dừng coin để tránh sideway")
                             self.stop_symbol(symbol, failed=True)
                             return True
-                        reverse_margin = prev_margin_used * float(_STRATEGY_CONFIG.get('reverse_capital_multiplier', 1.3))
-                        if self._open_symbol_position(symbol, reverse_side, skip_signal_check=True, margin_override=reverse_margin, is_reverse=True, reverse_count=prev_reverse_count + 1):
+                        if self._open_symbol_position(symbol, reverse_side, skip_signal_check=True, margin_override=None, is_reverse=True, reverse_count=prev_reverse_count + 1):
                             self.log(f"✅ Đảo chiều thành công trên {symbol}")
                         else:
                             self.log(f"❌ Đảo chiều thất bại trên {symbol}, dừng coin")
@@ -2306,13 +2299,9 @@ class BaseBot:
                     self.stop_symbol(symbol, failed=True)
                     return False
 
-                if margin_override is not None and margin_override > 0:
-                    max_allowed = available_balance * (float(_STRATEGY_CONFIG.get('max_reverse_balance_percent', 90.0)) / 100.0)
-                    required_usd = min(float(margin_override), max_allowed)
-                    sizing_label = f"đảo chiều theo vốn lệnh trước x{float(_STRATEGY_CONFIG.get('reverse_capital_multiplier', 1.3)):.2f}"
-                else:
-                    required_usd = total_balance * (self.percent / 100)
-                    sizing_label = f"lệnh đầu theo {self.percent}% tổng số dư"
+                # Vốn mới: mọi lệnh, kể cả đảo chiều, đều lấy theo % số dư margin/khả dụng hiện tại.
+                required_usd = available_balance * (self.percent / 100)
+                sizing_label = f"{self.percent}% số dư khả dụng hiện tại"
 
                 if required_usd <= 0:
                     self.log(f"❌ {symbol} - Vốn vào lệnh quá nhỏ ({required_usd:.2f})")
@@ -2928,24 +2917,17 @@ class BotManager:
         current_step = user_state.get('step')
 
         strategy_key_map = {
-            '✏️ Signal timeframe': ('signal_interval', 'Khung nến dùng để đo tốc độ volume nến hiện tại so với nến đóng gần nhất. Ví dụ: 1m, 3m, 5m.'),
-            '✏️ Market timeframe': ('market_interval', 'Khung nến dùng để lấy hướng thị trường và lọc sideway. Ví dụ: 5m, 15m, 30m, 1h.'),
-            '✏️ Trend speed Y': ('trend_speed_factor', 'Nếu speed ratio >= Y và thị trường không sideway thì vào THEO hướng thị trường. Ví dụ 1.2, 1.5, 2.0'),
-            '✏️ Climax speed X': ('climax_speed_factor', 'Nếu speed ratio >= X thì coi là climax và vào NGƯỢC hướng thị trường. Nên đặt X > Y, ví dụ 3.0, 4.0, 5.0'),
-            '✏️ Market body ratio': ('market_body_ratio_min', 'Nếu thân nến thị trường / range nhỏ hơn mức này thì coi là sideway và không vào. Ví dụ 0.15, 0.25, 0.35'),
-            '✏️ Use EMA/RSI': ('use_market_indicators', '1 = bật lọc EMA/RSI, 0 = tắt và chỉ dùng hướng nến market.'),
-            '✏️ EMA fast': ('ema_fast_period', 'Chu kỳ EMA nhanh. Ví dụ 9, 14.'),
-            '✏️ EMA slow': ('ema_slow_period', 'Chu kỳ EMA chậm. Ví dụ 21, 34.'),
-            '✏️ EMA gap min %': ('ema_gap_min_pct', 'Khoảng cách tối thiểu giữa EMA fast và EMA slow theo %. Nhỏ quá coi là sideway. Ví dụ 0.03, 0.05, 0.10.'),
-            '✏️ RSI period': ('rsi_period', 'Chu kỳ RSI. Ví dụ 14.'),
-            '✏️ RSI trend BUY': ('rsi_trend_buy_min', 'RSI tối thiểu để xác nhận trend BUY. Ví dụ 55 hoặc 60.'),
-            '✏️ RSI trend SELL': ('rsi_trend_sell_max', 'RSI tối đa để xác nhận trend SELL. Ví dụ 45 hoặc 40.'),
-            '✏️ RSI climax OB': ('rsi_climax_overbought', 'RSI quá mua để xác nhận climax tăng rồi vào ngược SELL. Ví dụ 70, 75, 80.'),
-            '✏️ RSI climax OS': ('rsi_climax_oversold', 'RSI quá bán để xác nhận climax giảm rồi vào ngược BUY. Ví dụ 30, 25, 20.'),
-            '✏️ Min elapsed seconds': ('min_elapsed_seconds', 'Số giây tối thiểu của nến tín hiệu trước khi xét để tránh tốc độ tức thì. Ví dụ 6, 10, 15.'),
-            '✏️ Reverse capital multiplier': ('reverse_capital_multiplier', 'Lệnh đảo chiều = vốn lệnh vừa đóng * hệ số. Ví dụ 1.1, 1.3, 1.5'),
-            '✏️ Max reverse balance %': ('max_reverse_balance_percent', 'Giới hạn vốn đảo chiều tối đa theo số dư khả dụng. Ví dụ 70, 80, 90'),
-            '✏️ Max reverse count': ('max_reverse_count', 'Số lần đảo chiều liên tiếp tối đa trước khi dừng coin để tránh sideway. Ví dụ 1, 2, 3'),
+            '✏️ Signal timeframe': ('signal_interval', 'Khung nến dùng cho C1..C6. Ví dụ: 1m, 3m, 5m, 15m.'),
+            '✏️ Min elapsed seconds': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại C6 trước khi xét. Ví dụ 6, 10, 15.'),
+            '✏️ Body ratio min': ('body_ratio_min', 'C5/C6 phải có thân / range >= mức này để tránh doji/sideway. Ví dụ 0.20, 0.25, 0.30'),
+            '✏️ Speed edge tolerance': ('speed_edge_tolerance', 'Sai số khi xét C1 cao nhất, C5 thấp nhất/C4 cao nhất. Ví dụ 0.03, 0.05, 0.10'),
+            '✏️ Current vs low': ('current_vs_low_factor', 'C6 phải nhanh hơn C5 tối thiểu bao nhiêu lần. Ví dụ 1.1, 1.2, 1.5'),
+            '✏️ Strong decline factor': ('strong_decline_factor', 'Nếu C1/C5 >= mức này thì coi là giảm mạnh và yêu cầu C6 > C4+C5. Ví dụ 1.5, 2.0, 3.0'),
+            '✏️ Current vs recent': ('current_vs_recent_factor', 'Trong giảm mạnh/nhấp nhô, C6 phải nhanh hơn C4 và C5 bao nhiêu lần. Ví dụ 1.0, 1.1, 1.2'),
+            '✏️ Choppy pattern': ('choppy_pattern_enabled', '1 = bật case nhấp nhô: C6 nhanh hơn C4+C5 và ngược hướng đa số 5 nến trước; 0 = tắt'),
+            '✏️ Peak pullback': ('peak_pullback_enabled', '1 = bật case tăng tốc quá nhanh rồi C5 hụt, C6 ngược đa số; 0 = tắt'),
+            '✏️ Low volume filter': ('low_volume_filter_enabled', '1 = bật lọc coin volume 24h thấp; 0 = tắt'),
+            '✏️ Min 24h volume': ('min_24h_volume', 'Volume 24h tối thiểu của coin để bot động chọn. Ví dụ 10000000, 50000000'),
             '✏️ Profit protect ON/OFF': ('profit_protect_enabled', '1 = bật hút lực từ đỉnh, 0 = tắt.'),
             '✏️ Profit start ROI': ('profit_protect_start_roi', 'ROI tối thiểu để bắt đầu bảo vệ lợi nhuận. Ví dụ 10, 20, 30.'),
             '✏️ Profit pullback ROI': ('profit_protect_pullback_roi', 'Khi ROI tụt khỏi đỉnh bao nhiêu % thì đóng. Ví dụ 5, 8, 10.'),
@@ -3242,14 +3224,14 @@ class BotManager:
 
             success = self.add_bot(
                 symbol=symbol, lev=leverage, percent=percent, tp=tp, sl=sl,
-                strategy_type="MarketRegimeSpeedStrategy",
+                strategy_type="SpeedPatternStrategy",
                 bot_mode=bot_mode, bot_count=bot_count
             )
 
             if success:
                 success_msg = (
                     f"✅ <b>ĐÃ TẠO BOT MARKET REGIME + SPEED THÀNH CÔNG</b>\n\n"
-                    f"🤖 Chiến lược: market regime + speed + profit protect\n"
+                    f"🤖 Chiến lược: speed pattern 5+1 + profit protect\n"
                     f"🔧 Chế độ: {bot_mode}\n"
                     f"🔢 Số bot: {bot_count}\n"
                     f"💰 Đòn bẩy: {leverage}x\n"
