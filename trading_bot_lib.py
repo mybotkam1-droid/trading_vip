@@ -1,11 +1,3 @@
-# trading_bot_reversal.py
-# =============================================================================
-#  BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 1 PHÚT (VOLUME + BODY)
-#  - Vào lệnh dựa trên tín hiệu nến hiện tại.
-#  - Thoát lệnh khi nến mới đóng có tín hiệu ngược hướng → đóng và đảo chiều.
-#  - Hỗ trợ TP/SL (ROI sau đòn bẩy). Nếu đặt cả TP và SL, khi chạm TP/SL sẽ đổi coin khác.
-#  - Không sử dụng cân bằng lệnh toàn cục, không pyramiding, không ROI trigger.
-# =============================================================================
 
 import json
 import hmac
@@ -31,14 +23,12 @@ import html
 import sys
 from typing import Optional, List, Dict, Any, Tuple, Callable
 
-# ========== CẤU HÌNH & HẰNG SỐ ==========
 _BINANCE_LAST_REQUEST_TIME = 0
 _BINANCE_RATE_LOCK = threading.RLock()
 _BINANCE_MIN_INTERVAL = 0.2
 
 _SYMBOL_BLACKLIST = {'BTCUSDT', 'BTCUSDC','ETHUSDT','ETHUSDC'}
 
-# ========== CACHE COIN TẬP TRUNG ==========
 class CoinCache:
     def __init__(self):
         self._data: List[Dict] = []
@@ -82,36 +72,6 @@ class CoinCache:
 
 _COINS_CACHE = CoinCache()
 
-# ========== CẤU HÌNH LỌC RIÊNG CHO MUA VÀ BÁN ==========
-class BalanceConfig:
-    def __init__(self):
-        self._config = {
-            "max_price_buy": float('inf'),
-            "max_volume_buy": float('inf'),
-            "min_price_sell": 0.0,
-            "min_volume_sell": 0.0,
-            "min_leverage": 10,
-            "sort_by_volume": True,
-        }
-        self._lock = threading.RLock()
-
-    def get(self, key: str, default=None):
-        with self._lock:
-            return self._config.get(key, default)
-
-    def get_all(self) -> Dict:
-        with self._lock:
-            return self._config.copy()
-
-    def update(self, **kwargs):
-        with self._lock:
-            for k, v in kwargs.items():
-                if v is not None:
-                    self._config[k] = v
-
-_BALANCE_CONFIG = BalanceConfig()
-
-# ========== HÀM TIỆN ÍCH ==========
 def setup_logging():
     logging.basicConfig(
         level=logging.INFO,
@@ -122,9 +82,6 @@ def setup_logging():
 
 logger = setup_logging()
 
-# ========== CACHE DỮ LIỆU TÍN HIỆU SPEED PATTERN ==========
-# Cache REST rất ngắn để tránh gọi Binance lặp liên tục khi quét nhiều coin.
-# Quan trọng: cache có giới hạn và tự dọn, không sinh vô hạn.
 _SIGNAL_DATA_CACHE = {}
 _SIGNAL_DATA_CACHE_TTL = 1.5
 _SIGNAL_DATA_CACHE_MAX_SIZE = 1000
@@ -142,7 +99,6 @@ def _cleanup_signal_data_cache():
                 _SIGNAL_DATA_CACHE.pop(k, None)
     except Exception:
         pass
-
 
 def escape_html(text):
     if not text: return text
@@ -166,7 +122,6 @@ def send_telegram(message, chat_id=None, reply_markup=None, bot_token=None, defa
     except Exception as e:
         logger.error(f"Lỗi kết nối Telegram: {str(e)}")
 
-# ========== HÀM TẠO BÀN PHÍM (giữ nguyên) ==========
 def create_main_menu():
     return {
         "keyboard": [
@@ -271,16 +226,6 @@ def create_sl_keyboard():
         "resize_keyboard": True, "one_time_keyboard": True
     }
 
-def create_balance_config_keyboard():
-    return {
-        "keyboard": [
-            [{"text": "⚖️ Bật cân bằng lệnh"}, {"text": "⚖️ Tắt cân bằng lệnh"}],
-            [{"text": "📊 Xem cấu hình cân bằng"}, {"text": "🔄 Làm mới cache"}],
-            [{"text": "❌ Hủy bỏ"}]
-        ],
-        "resize_keyboard": True, "one_time_keyboard": True
-    }
-
 def create_strategy_config_keyboard():
     return {
         "keyboard": [
@@ -300,8 +245,6 @@ def create_strategy_config_keyboard():
         "one_time_keyboard": False
     }
 
-
-# ========== HÀM API BINANCE (giữ nguyên) ==========
 def _wait_for_rate_limit():
     global _BINANCE_LAST_REQUEST_TIME
     with _BINANCE_RATE_LOCK:
@@ -387,7 +330,6 @@ def binance_api_request(url, method='GET', params=None, headers=None):
     logger.error(f"❌ Thất bại yêu cầu API sau {max_retries} lần thử: {base_url}")
     return None
 
-# ========== HÀM CACHE COIN (giữ nguyên) ==========
 def refresh_coins_cache():
     try:
         url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
@@ -536,79 +478,6 @@ def force_refresh_coin_cache():
         return True
     return False
 
-# ========== HÀM LỌC COIN ==========
-def filter_coins_for_side(side, excluded_coins=None):
-    all_coins = get_coins_with_info()
-    filtered = []
-
-    if not all_coins:
-        logger.warning("❌ Cache coin trống!")
-        return filtered
-
-    max_price_buy = _BALANCE_CONFIG.get("max_price_buy", float('inf'))
-    max_volume_buy = _BALANCE_CONFIG.get("max_volume_buy", float('inf'))
-    min_price_sell = _BALANCE_CONFIG.get("min_price_sell", 0.0)
-    min_volume_sell = _BALANCE_CONFIG.get("min_volume_sell", 0.0)
-
-    logger.info(f"🔍 Lọc coin cho hướng {side} | Tổng số coin: {len(all_coins)}")
-    if side == "BUY":
-        logger.info(f"⚙️ Điều kiện MUA: giá ≤ {max_price_buy} USDT, volume ≤ {max_volume_buy}")
-    else:
-        logger.info(f"⚙️ Điều kiện BÁN: giá ≥ {min_price_sell} USDT, volume ≥ {min_volume_sell}")
-
-    excluded_set = set(excluded_coins or [])
-    blacklisted = 0
-    excluded_cnt = 0
-    condition_fail = 0
-    volume_zero = 0
-    price_zero = 0
-
-    for coin in all_coins:
-        sym = coin['symbol']
-        if sym in _SYMBOL_BLACKLIST:
-            blacklisted += 1
-            continue
-        if sym in excluded_set:
-            excluded_cnt += 1
-            continue
-        if coin['price'] <= 0:
-            price_zero += 1
-            continue
-        if coin['volume'] <= 0:
-            volume_zero += 1
-
-        if side == "BUY":
-            if coin['price'] > max_price_buy and coin['volume'] > max_volume_buy:
-                condition_fail += 1
-                continue
-        else:  # SELL
-            if coin['price'] < min_price_sell and coin['volume'] < min_volume_sell:
-                condition_fail += 1
-                continue
-
-        filtered.append(coin)
-
-    logger.info(f"📊 {side}: {len(filtered)} coin phù hợp (loại: blacklist={blacklisted}, excluded={excluded_cnt}, không thỏa điều kiện={condition_fail}, volume0={volume_zero}, price0={price_zero})")
-    if filtered:
-        for i, c in enumerate(filtered[:5]):
-            logger.info(f"  {i+1}. {c['symbol']} | giá: {c['price']:.4f} | volume: {c['volume']:.2f}")
-
-    return filtered
-
-def update_balance_config(max_price_buy=None, max_volume_buy=None, min_price_sell=None, min_volume_sell=None,
-                          min_leverage=None, sort_by_volume=None):
-    _BALANCE_CONFIG.update(
-        max_price_buy=max_price_buy,
-        max_volume_buy=max_volume_buy,
-        min_price_sell=min_price_sell,
-        min_volume_sell=min_volume_sell,
-        min_leverage=min_leverage,
-        sort_by_volume=sort_by_volume
-    )
-    logger.info(f"✅ Cập nhật cấu hình lọc: {_BALANCE_CONFIG.get_all()}")
-    return _BALANCE_CONFIG.get_all()
-
-# ========== CÁC HÀM API BINANCE KHÁC (giữ nguyên) ==========
 def set_leverage(symbol, lev, api_key, api_secret):
     if not symbol: return False
     try:
@@ -758,32 +627,6 @@ def get_current_price(symbol):
         logger.error(f"Lỗi giá {symbol}: {str(e)}")
         return 0
 
-# ========== CACHE MARK PRICE (TTL 1 giây) ==========
-_mark_price_cache = {}
-_mark_price_time = {}
-
-def get_mark_price(symbol):
-    if not symbol:
-        return 0
-    now = time.time()
-    if symbol in _mark_price_cache and (now - _mark_price_time.get(symbol, 0)) < 1.0:
-        return _mark_price_cache[symbol]
-    try:
-        url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol.upper()}"
-        data = binance_api_request(url)
-        if data and 'markPrice' in data:
-            price = float(data['markPrice'])
-            _mark_price_cache[symbol] = price
-            _mark_price_time[symbol] = now
-            return price
-    except Exception as e:
-        logger.error(f"Lỗi lấy mark price {symbol}: {e}")
-    price = get_current_price(symbol)
-    _mark_price_cache[symbol] = price
-    _mark_price_time[symbol] = now
-    return price
-
-# ========== HÀM PHÂN TÍCH TÍN HIỆU REALTIME THEO KHUNG CHỌN ==========
 _BINANCE_INTERVAL_SECONDS = {
     '1m': 60.0, '3m': 180.0, '5m': 300.0, '15m': 900.0,
     '30m': 1800.0, '1h': 3600.0, '2h': 7200.0, '4h': 14400.0
@@ -797,70 +640,27 @@ def _interval_seconds(interval=None):
     return float(_BINANCE_INTERVAL_SECONDS.get(_normalize_interval(interval), 60.0))
 
 class StrategyConfig:
-    """Cấu hình chiến lược SPEED PATTERN: 5 nến đã đóng + nến hiện tại, vốn theo % số dư margin."""
+    """Cấu hình chiến lược SPEED PATTERN 5+1, vốn theo % số dư margin."""
     DEFAULTS = {
-        # Khung nến dùng cho cả 5 nến đã đóng và nến hiện tại.
         'signal_interval': '1m',
         'timeframe_seconds': 60.0,
-        # Chờ nến hiện tại chạy đủ để tránh tốc độ tức thì bị phóng đại.
         'min_elapsed_seconds': 6.0,
-        # Lọc nến sideway/doji: body / range phải đủ lớn.
         'body_ratio_min': 0.25,
-        # Sai số khi xét C1 cao nhất, C5 thấp nhất hoặc C4 cao nhất.
         'speed_edge_tolerance': 0.05,
-        # C6 phải nhanh hơn C5 tối thiểu bao nhiêu lần.
         'current_vs_low_factor': 1.20,
-        # Nếu 5 nến trước giảm mạnh, C6 phải nhanh hơn cả C4 và C5.
         'strong_decline_factor': 2.00,
         'current_vs_recent_factor': 1.00,
-        # Nhấp nhô: chỉ vào khi C6 nhanh hơn C4+C5 và ngược hướng đa số 5 nến trước.
         'choppy_pattern_enabled': 1.0,
-        # Tăng tốc quá nhanh rồi C5 giảm: chỉ vào khi C6 ngược hướng đa số 5 nến trước.
         'peak_pullback_enabled': 1.0,
-        # Lọc coin volume 24h thấp để tránh coin rác/low liquidity.
         'low_volume_filter_enabled': 1.0,
         'min_24h_volume': 10000000.0,
-        # Bảo vệ lợi nhuận giữ lại để tránh đang lãi thành lỗ.
         'profit_protect_enabled': 1.0,
         'profit_protect_start_roi': 10.0,
         'profit_protect_pullback_roi': 8.0,
-        # Giữ các key cũ để không vỡ state/menu cũ nhưng không dùng trong chiến lược mới.
-        'market_interval': '1m',
-        'trend_speed_factor': 1.62,
-        'climax_speed_factor': 4.00,
-        'market_body_ratio_min': 0.20,
-        'use_market_indicators': 0.0,
-        'ema_fast_period': 9,
-        'ema_slow_period': 21,
-        'ema_gap_min_pct': 0.03,
-        'rsi_period': 14,
-        'rsi_trend_buy_min': 60.0,
-        'rsi_trend_sell_max': 40.0,
-        'rsi_climax_overbought': 80.0,
-        'rsi_climax_oversold': 20.0,
-        'reverse_capital_multiplier': 1.0,
-        'max_reverse_balance_percent': 100.0,
         'max_reverse_count': 10,
-        'entry_score': 1,
-        'exit_score': 1,
-        'entry_min_progress': 0.10,
-        'exit_min_progress': 0.10,
-        'projected_volume_factor': 1.20,
-        'body_speed_factor': 1.00,
-        'doji_ratio': 0.10,
-        'volume_spike_factor': 5.0,
-        'exit_persist_seconds': 0.0,
-        'max_body_avg_factor': 999999.0,
-        'closed_1m_vs_15m_factor': 1.5,
-        'current_1m_vs_closed_factor': 1.2,
-        'breakout_lookback': 0,
-        'min_current_body_factor': 0.0,
-        'max_chase_body_factor': 999999.0,
-        'close_position_buy': 0.65,
-        'close_position_sell': 0.35,
     }
-    INT_KEYS = {'entry_score', 'exit_score', 'breakout_lookback', 'max_reverse_count', 'ema_fast_period', 'ema_slow_period', 'rsi_period'}
-    STRING_KEYS = {'signal_interval', 'market_interval'}
+    INT_KEYS = {'max_reverse_count'}
+    STRING_KEYS = {'signal_interval'}
 
     def __init__(self):
         self._config = self.DEFAULTS.copy()
@@ -953,47 +753,6 @@ def _candle_get(c, key, idx, default=0.0):
     except Exception:
         return float(default)
 
-def _ema(values, period):
-    try:
-        values = [float(v) for v in values]
-        period = max(1, int(period))
-        if not values:
-            return None
-        alpha = 2.0 / (period + 1.0)
-        ema = values[0]
-        for v in values[1:]:
-            ema = alpha * v + (1.0 - alpha) * ema
-        return ema
-    except Exception:
-        return None
-
-
-def _rsi(values, period=14):
-    try:
-        values = [float(v) for v in values]
-        period = max(1, int(period))
-        if len(values) <= period:
-            return None
-        gains = []
-        losses = []
-        for i in range(1, len(values)):
-            diff = values[i] - values[i - 1]
-            gains.append(max(diff, 0.0))
-            losses.append(max(-diff, 0.0))
-        avg_gain = sum(gains[:period]) / period
-        avg_loss = sum(losses[:period]) / period
-        for g, l in zip(gains[period:], losses[period:]):
-            avg_gain = (avg_gain * (period - 1) + g) / period
-            avg_loss = (avg_loss * (period - 1) + l) / period
-        if avg_loss == 0:
-            return 100.0
-        rs = avg_gain / avg_loss
-        return 100.0 - (100.0 / (1.0 + rs))
-    except Exception:
-        return None
-
-
-
 def _is_not_sideway_candle(open_price, close_price, high_price, low_price, min_body_ratio=None):
     try:
         min_body_ratio = float(_STRATEGY_CONFIG.get('body_ratio_min', 0.25) if min_body_ratio is None else min_body_ratio)
@@ -1005,7 +764,6 @@ def _is_not_sideway_candle(open_price, close_price, high_price, low_price, min_b
     except Exception:
         return False, 0.0
 
-
 def _history_candle_direction(candle):
     try:
         o = _candle_get(candle, 'open', 1)
@@ -1013,7 +771,6 @@ def _history_candle_direction(candle):
         return _candle_direction(o, c)
     except Exception:
         return None
-
 
 def _majority_direction(candles):
     buys = 0
@@ -1030,80 +787,18 @@ def _majority_direction(candles):
         return 'SELL'
     return None
 
-
 def _volume_speed(candle):
     return max(0.0, _candle_get(candle, 'volume', 5))
-
 
 def _near_highest(value, values, tolerance):
     if not values:
         return False
     return float(value) >= max(values) * (1.0 - float(tolerance))
 
-
 def _near_lowest(value, values, tolerance):
     if not values:
         return False
     return float(value) <= min(values) * (1.0 + float(tolerance))
-
-def _market_context_from_candle(market_candle, market_history=None):
-    """Trả về dict market context theo nến market + EMA + RSI."""
-    try:
-        cfg = _STRATEGY_CONFIG.get_all()
-        if not market_candle:
-            return {'side': None, 'body_ratio': 0.0, 'range': 0.0, 'reason': 'missing_market_candle', 'rsi': None}
-        open_m = _candle_get(market_candle, 'open', 1)
-        high_m = _candle_get(market_candle, 'high', 2)
-        low_m = _candle_get(market_candle, 'low', 3)
-        close_m = _candle_get(market_candle, 'close', 4)
-        m_range = high_m - low_m
-        if m_range <= 0:
-            return {'side': None, 'body_ratio': 0.0, 'range': 0.0, 'reason': 'bad_market_range', 'rsi': None}
-        body_ratio = abs(close_m - open_m) / m_range
-        candle_side = _candle_direction(open_m, close_m)
-        if not candle_side:
-            return {'side': None, 'body_ratio': body_ratio, 'range': m_range, 'reason': 'flat_market', 'rsi': None}
-        if float(cfg.get('use_market_indicators', 1.0)) < 0.5:
-            return {'side': candle_side, 'body_ratio': body_ratio, 'range': m_range, 'reason': 'candle_only', 'rsi': None, 'ema_fast': None, 'ema_slow': None, 'ema_gap_pct': None}
-        if market_history is None and isinstance(market_candle, dict):
-            market_history = market_candle.get('history')
-        closes = []
-        for c in (market_history or []):
-            try:
-                closes.append(_candle_get(c, 'close', 4))
-            except Exception:
-                pass
-        if not closes or abs(closes[-1] - close_m) > 1e-12:
-            closes.append(close_m)
-        fast_p = int(cfg.get('ema_fast_period', 9))
-        slow_p = int(cfg.get('ema_slow_period', 21))
-        rsi_p = int(cfg.get('rsi_period', 14))
-        min_needed = max(slow_p + 3, rsi_p + 3, 10)
-        if len(closes) < min_needed:
-            return {'side': candle_side, 'body_ratio': body_ratio, 'range': m_range, 'reason': f'indicator_fallback_not_enough_history len={len(closes)} need={min_needed}', 'rsi': None, 'ema_fast': None, 'ema_slow': None, 'ema_gap_pct': None}
-        ema_fast = _ema(closes, fast_p)
-        ema_slow = _ema(closes, slow_p)
-        rsi_val = _rsi(closes, rsi_p)
-        if ema_fast is None or ema_slow is None or rsi_val is None or close_m <= 0:
-            return {'side': None, 'body_ratio': body_ratio, 'range': m_range, 'reason': 'indicator_error', 'rsi': rsi_val}
-        ema_gap_pct = abs(ema_fast - ema_slow) / close_m * 100.0
-        ema_gap_min = float(cfg.get('ema_gap_min_pct', 0.03))
-        if ema_gap_pct < ema_gap_min:
-            return {'side': None, 'body_ratio': body_ratio, 'range': m_range, 'reason': f'ema_gap_sideway gap={ema_gap_pct:.4f}% need={ema_gap_min:.4f}%', 'rsi': rsi_val, 'ema_fast': ema_fast, 'ema_slow': ema_slow, 'ema_gap_pct': ema_gap_pct}
-        buy_min = float(cfg.get('rsi_trend_buy_min', 55.0))
-        sell_max = float(cfg.get('rsi_trend_sell_max', 45.0))
-        if ema_fast > ema_slow and rsi_val >= buy_min:
-            side = 'BUY'
-            reason = 'ema_rsi_trend_buy'
-        elif ema_fast < ema_slow and rsi_val <= sell_max:
-            side = 'SELL'
-            reason = 'ema_rsi_trend_sell'
-        else:
-            return {'side': None, 'body_ratio': body_ratio, 'range': m_range, 'reason': f'rsi_neutral rsi={rsi_val:.2f} buy_min={buy_min:.1f} sell_max={sell_max:.1f}', 'rsi': rsi_val, 'ema_fast': ema_fast, 'ema_slow': ema_slow, 'ema_gap_pct': ema_gap_pct}
-        return {'side': side, 'body_ratio': body_ratio, 'range': m_range, 'reason': reason, 'rsi': rsi_val, 'ema_fast': ema_fast, 'ema_slow': ema_slow, 'ema_gap_pct': ema_gap_pct}
-    except Exception as e:
-        logger.error(f"Lỗi đọc market context EMA/RSI: {e}")
-        return {'side': None, 'body_ratio': 0.0, 'range': 0.0, 'reason': 'market_error', 'rsi': None}
 
 def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_curr,
                         prev_candle, market_candle=None, progress=1.0,
@@ -1163,7 +858,6 @@ def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_cu
         case = None
         need_speed = None
 
-        # Case A: giảm tốc tổng thể. Không cần C1>C2>C3>C4>C5 tuyệt đối, chỉ cần C1 vùng cao nhất và C5 vùng thấp nhất.
         decreasing_structure = _near_highest(s1, speeds, tol) and _near_lowest(s5, speeds, tol)
         if decreasing_structure:
             if s1 / max(s5, 1e-12) >= strong_decline_factor:
@@ -1173,13 +867,11 @@ def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_cu
             if current_speed > need_speed:
                 case = 'DECREASE_LOW_REBOUND'
 
-        # Case B: tăng tốc mạnh rồi C5 hụt, C6 tăng lại và ngược hướng đa số C1..C5.
         if case is None and float(cfg.get('peak_pullback_enabled', 1.0)) >= 0.5:
             peak_pullback = _near_highest(s4, speeds, tol) and s5 < s4 and current_speed > s5 * current_vs_low
             if peak_pullback and opposite_majority and current_side == opposite_majority:
                 case = 'PEAK_PULLBACK_REVERSE_MAJORITY'
 
-        # Case C: tốc độ lộn xộn/nhấp nhô. Mặc định chỉ vào nếu C6 mạnh hơn C4+C5 và ngược hướng đa số.
         if case is None and float(cfg.get('choppy_pattern_enabled', 1.0)) >= 0.5:
             if current_speed > max(s4, s5) * current_vs_recent and opposite_majority and current_side == opposite_majority:
                 case = 'CHOPPY_REVERSE_MAJORITY_STRONG_C6'
@@ -1200,7 +892,6 @@ def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_cu
         logger.error(f"Lỗi chấm điểm tín hiệu speed pattern: {e}")
         return None, 0, 'error', False
 
-
 def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
     return {
         'symbol': symbol.upper(), 'interval': _normalize_interval(interval),
@@ -1209,12 +900,6 @@ def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
         'is_final': is_final, 'time': int(arr[0]), 'close_time': int(arr[6]),
         'update_ts': time.time()
     }
-
-
-def _fetch_market_candle(symbol):
-    """Chiến lược mới không dùng market timeframe/EMA/RSI."""
-    return None
-
 
 def _fetch_rest_1m15m_signal_data(symbol):
     """Tên cũ giữ để tương thích: lấy current + previous + 5 nến đóng theo signal_interval."""
@@ -1241,7 +926,6 @@ def _fetch_rest_1m15m_signal_data(symbol):
     except Exception as e:
         logger.error(f"Lỗi REST lấy dữ liệu speed pattern {symbol}: {e}")
         return None, None, None, []
-
 
 def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, recent_1m_history=None):
     try:
@@ -1271,7 +955,6 @@ def get_candle_signal_1h(symbol):
         logger.error(f"Lỗi phân tích tín hiệu speed-only {symbol}: {e}")
         return None
 
-# ========== HÀM KIỂM TRA VỊ THẾ ==========
 def get_positions(symbol=None, api_key=None, api_secret=None):
     try:
         ts = int(time.time() * 1000)
@@ -1299,7 +982,6 @@ def has_open_position(symbol, api_key, api_secret):
             return True
     return False
 
-# Cache nhẹ cho positionRisk để tránh spam Binance.
 _POSITION_CACHE = {}
 _POSITION_CACHE_LOCK = threading.RLock()
 _POSITION_CACHE_TTL = 8.0
@@ -1335,7 +1017,6 @@ def has_open_position_cached(symbol, api_key, api_secret, ttl=_POSITION_CACHE_TT
     except Exception:
         return False
 
-# ========== LỚP QUẢN LÝ (giữ nguyên) ==========
 class CoinManager:
     def __init__(self):
         self.active_coins = set()
@@ -1489,7 +1170,6 @@ class SmartCoinFinder:
                 logger.warning("⚠️ Cache coin trống, không thể tìm coin.")
                 return None
 
-            # Duyệt tất cả coin, ưu tiên dùng tín hiệu realtime
             for coin in coins:
                 symbol = coin['symbol']
                 if symbol in _SYMBOL_BLACKLIST:
@@ -1502,18 +1182,14 @@ class SmartCoinFinder:
                         continue
                 if self._bot_manager and self._bot_manager.bot_coordinator.is_temp_blacklisted(symbol):
                     continue
-                # Không gọi positionRisk cho từng coin khi quét, tránh spam Binance/BadRequest.
-                # Bot chỉ loại coin đang được bot khác quản lý bằng coin_manager.
                 if self._bot_manager and self._bot_manager.coin_manager.is_coin_active(symbol):
                     continue
 
-                # Lấy tín hiệu realtime từ bot manager (nếu có)
                 signal = None
                 if self._bot_manager and hasattr(self._bot_manager, 'kline_manager'):
                     kline_mgr = self._bot_manager.kline_manager
                     candle = kline_mgr.get_candle(symbol)
                     prev_candle = None  # cần lưu prev? ta sẽ lấy từ cache riêng
-                    # Đơn giản: dùng hàm fallback vì finder không có realtime sẵn
                     signal = get_candle_signal_1h(symbol)
                 else:
                     signal = get_candle_signal_1h(symbol)
@@ -1531,7 +1207,6 @@ class SmartCoinFinder:
             logger.error(traceback.format_exc())
             return None
 
-# ========== WEBSOCKET MANAGER (trade stream giá) ==========
 class WebSocketManager:
     def __init__(self):
         self.connections = {}
@@ -1613,7 +1288,6 @@ class WebSocketManager:
             self.remove_symbol(symbol)
         self.executor.shutdown(wait=False)
 
-# ========== REALTIME KLINE MANAGER (1h) - MỚI ==========
 class RealtimeKlineManager:
     def __init__(self):
         self.connections = {}
@@ -1751,7 +1425,6 @@ class RealtimeKlineManager:
             self.remove_symbol(sym)
         self.executor.shutdown(wait=False)
 
-# ========== LỚP BaseBot (SỬA: THÊM REALTIME KLINE, BỎ last_candle_check) ==========
 class BaseBot:
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret,
                  telegram_bot_token, telegram_chat_id, strategy_name, config_key=None, bot_id=None,
@@ -1805,21 +1478,18 @@ class BaseBot:
 
         self.bot_coordinator = bot_coordinator or BotExecutionCoordinator()
 
-        # Cân bằng/lọc coin đã được bỏ khỏi luồng giao dịch. Bot chỉ dựa vào tín hiệu chiến lược.
         self.enable_balance_orders = False
         self.balance_config = {}
 
         self.consecutive_failures = 0
         self.failure_cooldown_until = 0
 
-        # Dữ liệu realtime signal
         self.realtime_signal = {}        # symbol -> 'BUY'/'SELL'/None
         self.last_signal_time = {}       # symbol -> timestamp
         self.signal_cache_ttl = 2        # giây
         self.last_signal_debug_time = {}  # symbol -> timestamp, chống spam log debug tín hiệu
         self.exit_candidate = {}          # symbol -> {'side': ..., 'since': ...}
 
-        # Biến hỗ trợ đảo chiều
         self._pending_reverse = False
         self._reverse_symbol = None
         self._reverse_side = None
@@ -1887,8 +1557,6 @@ class BaseBot:
                     time.sleep(5)
                     continue
 
-                # Đảo chiều được xử lý ngay trong _close_symbol_position().
-                # Không còn vòng chờ đảo chiều để tránh tính lại tín hiệu rồi hủy đảo sai nhịp.
                 if self._pending_reverse:
                     self._pending_reverse = False
                     self._reverse_symbol = None
@@ -1923,12 +1591,8 @@ class BaseBot:
                 self.stop_symbol(symbol, failed=True)
                 return False
 
-            # Không kiểm tra positionRisk định kỳ để tránh spam Binance.
-            # Trạng thái vị thế được cập nhật sau khi mở/đóng lệnh và chỉ force-check khi thật sự cần.
             if symbol_info['position_open']:
-                # Kiểm tra TP/SL
                 self._check_symbol_tp_sl(symbol)
-                # Kiểm tra tín hiệu real-time để đóng/đảo chiều
                 self._check_realtime_exit(symbol)
                 return False
             else:
@@ -1937,7 +1601,6 @@ class BaseBot:
 
                 if (current_time - symbol_info['last_trade_time'] > 30 and
                     current_time - symbol_info['last_close_time'] > 30):
-                    # Lấy tín hiệu mới nhất từ nến hiện tại chưa đóng + nến đã đóng gần nhất.
                     signal = self._get_fresh_realtime_signal(symbol)
                     if signal is None:
                         return False
@@ -1973,9 +1636,7 @@ class BaseBot:
             'best_roi': None,
             'added_time': time.time()
         }
-        # Đăng ký WebSocket giá
         self.ws_manager.add_symbol(symbol, lambda p, s=symbol: self._handle_price_update(s, p))
-        # Đăng ký Kline realtime nếu có
         if self.kline_manager:
             self.kline_manager.add_symbol(symbol, self._on_kline_update)
         self.coin_manager.register_coin(symbol)
@@ -2173,15 +1834,11 @@ class BaseBot:
         if not data['position_open']:
             return
 
-        # Không gọi positionRisk tại đây. TP/SL chỉ cần entry/side/qty local;
-        # khi thật sự đóng lệnh, _close_symbol_position mới force-check đúng 1 lần để lấy qty chuẩn.
         entry = float(data.get('entry', 0) or 0)
         if entry <= 0 or abs(float(data.get('qty', 0) or 0)) <= 0:
             return
 
-        current_price = get_mark_price(symbol)
-        if current_price <= 0:
-            current_price = self.get_current_price(symbol)
+        current_price = self.get_current_price(symbol)
         if current_price <= 0:
             return
 
@@ -2190,7 +1847,6 @@ class BaseBot:
         else:
             roi = (entry - current_price) / entry * 100 * self.lev
 
-        # Hút lực từ đỉnh: nếu ROI đã lên đủ cao rồi tụt khỏi đỉnh một khoảng cố định thì chốt, không đảo.
         if float(_STRATEGY_CONFIG.get('profit_protect_enabled', 1.0)) >= 0.5:
             best_roi = data.get('best_roi')
             if best_roi is None:
@@ -2253,9 +1909,6 @@ class BaseBot:
                     time.sleep(1)
                     self._reset_symbol_position(symbol)
 
-                    # Quyết định sau khi đóng. Với tín hiệu nến ngược, đảo chiều ngay bằng chính
-                    # tín hiệu vừa dùng để đóng, không tính lại lần nữa nên không còn lỗi
-                    # "tín hiệu đảo chiều đã yếu/mất" rồi mở lại hướng cũ.
                     if "Candle opposite" in reason:
                         reverse_side = reverse_side or ("SELL" if side == "BUY" else "BUY")
                         self._pending_reverse = False
@@ -2296,14 +1949,10 @@ class BaseBot:
     def _open_symbol_position(self, symbol, side, skip_signal_check=False, margin_override=None, is_reverse=False, reverse_count=0):
         with self.symbol_locks[symbol]:
             try:
-                # Không gọi positionRisk trước mỗi lần mở để tránh spam API.
-                # Khóa symbol + trạng thái local đã đủ để bot không tự mở trùng lệnh.
                 if self.symbol_data.get(symbol, {}).get('position_open'):
                     self.log(f"⚠️ {symbol} local đang có vị thế, không mở thêm")
                     return False
 
-                # Kiểm tra tín hiệu realtime trước khi vào lệnh (trừ khi skip).
-                # Dùng tín hiệu tính mới trực tiếp từ nến chưa đóng, không dùng cache cũ.
                 if not skip_signal_check:
                     current_signal = self._get_fresh_realtime_signal(symbol)
                     if current_signal is None or current_signal != side:
@@ -2323,8 +1972,6 @@ class BaseBot:
                     self.stop_symbol(symbol, failed=True)
                     return False
 
-                # Vốn mới: mọi lệnh, kể cả đảo chiều, đều lấy theo % SỐ DƯ MARGIN.
-                # Không dùng % số dư khả dụng làm nền tính vốn nữa.
                 required_usd = margin_balance * (self.percent / 100)
                 sizing_label = f"{self.percent}% số dư margin hiện tại"
 
@@ -2341,8 +1988,6 @@ class BaseBot:
                     self.log(f"❌ {symbol} - Lỗi giá")
                     self.stop_symbol(symbol, failed=True)
                     return False
-
-                # Đã bỏ cân bằng/lọc coin: vào lệnh chỉ theo tín hiệu chiến lược và quản trị TP/SL.
 
                 step_size = get_step_size(symbol)
                 min_qty = get_min_qty_from_cache(symbol)
@@ -2506,7 +2151,6 @@ class BaseBot:
                 'best_roi': None,
             })
             self.symbol_data[symbol]['last_close_time'] = time.time()
-            # Không còn last_candle_check
 
     def stop_symbol(self, symbol, failed=False):
         if symbol not in self.active_symbols:
@@ -2589,7 +2233,6 @@ class BaseBot:
 class GlobalMarketBot(BaseBot):
     pass
 
-# ========== BotManager (THÊM KLINE MANAGER) ==========
 class BotManager:
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
         self.ws_manager = WebSocketManager()
@@ -3282,6 +2925,4 @@ class BotManager:
                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
             self.user_states[chat_id] = {}
 
-
-# ========== BỎ QUA SSL ==========
 ssl._create_default_https_context = ssl._create_unverified_context
