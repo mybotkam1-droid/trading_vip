@@ -273,6 +273,8 @@ def create_strategy_config_keyboard():
             [{"text": "✏️ Use EMA/RSI"}],
             [{"text": "✏️ Reverse capital multiplier"}, {"text": "✏️ Max reverse balance %"}],
             [{"text": "✏️ Max reverse count"}],
+            [{"text": "✏️ Profit protect ON/OFF"}],
+            [{"text": "✏️ Profit start ROI"}, {"text": "✏️ Profit pullback ROI"}],
             [{"text": "🔄 Reset chiến lược"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
@@ -847,25 +849,25 @@ class StrategyConfig:
         'signal_interval': '1m',
         'timeframe_seconds': 60.0,
         # Khung thị trường dùng để phân loại SIDEWAY / TRENDING / CLIMAX.
-        'market_interval': '15m',
+        'market_interval': '1m',
         # Chờ nến tín hiệu chạy đủ số giây tối thiểu để tránh tốc độ tức thì bị phóng đại.
         'min_elapsed_seconds': 6.0,
         # TRENDING: nếu speed ratio >= Y thì vào theo hướng thị trường.
-        'trend_speed_factor': 1.20,
+        'trend_speed_factor': 1.62,
         # CLIMAX: nếu speed ratio >= X thì vào ngược hướng thị trường. X nên lớn hơn Y.
-        'climax_speed_factor': 3.00,
+        'climax_speed_factor': 4.00,
         # Nếu nến thị trường có thân quá nhỏ so với range thì coi là sideway và không vào.
-        'market_body_ratio_min': 0.25,
+        'market_body_ratio_min': 0.20,
         # Bộ lọc thị trường bằng chỉ báo: EMA + RSI.
         'use_market_indicators': 1.0,
         'ema_fast_period': 9,
         'ema_slow_period': 21,
         'ema_gap_min_pct': 0.03,
         'rsi_period': 14,
-        'rsi_trend_buy_min': 55.0,
-        'rsi_trend_sell_max': 45.0,
-        'rsi_climax_overbought': 70.0,
-        'rsi_climax_oversold': 30.0,
+        'rsi_trend_buy_min': 60.0,
+        'rsi_trend_sell_max': 40.0,
+        'rsi_climax_overbought': 80.0,
+        'rsi_climax_oversold': 20.0,
         # Giữ các key cũ để không vỡ state/menu cũ. current_vs_closed_factor ánh xạ về trend_speed_factor.
         'current_vs_closed_factor': 1.20,
         'closed_1m_vs_15m_factor': 1.5,
@@ -877,9 +879,13 @@ class StrategyConfig:
         'close_position_buy': 0.65,
         'close_position_sell': 0.35,
         # Quản lý vốn đảo chiều - GIỮ NGUYÊN.
-        'reverse_capital_multiplier': 1.3,
+        'reverse_capital_multiplier': 1.10,
         'max_reverse_balance_percent': 90.0,
-        'max_reverse_count': 2,
+        'max_reverse_count': 10,
+        # Bảo vệ lợi nhuận: khi ROI từng đạt đỉnh rồi tụt xuống đủ sâu thì đóng, không đảo.
+        'profit_protect_enabled': 1.0,
+        'profit_protect_start_roi': 10.0,
+        'profit_protect_pullback_roi': 8.0,
         'entry_score': 1,
         'exit_score': 1,
         'entry_min_progress': 0.10,
@@ -943,7 +949,8 @@ def get_strategy_config_text():
         f"• Use EMA/RSI filter: {'ON' if float(c.get('use_market_indicators', 1.0)) >= 0.5 else 'OFF'}\n"
         f"• EMA fast/slow: {int(c.get('ema_fast_period', 9))}/{int(c.get('ema_slow_period', 21))} | gap min: {c.get('ema_gap_min_pct', 0.03):.3f}%\n"
         f"• RSI period: {int(c.get('rsi_period', 14))} | trend BUY≥{c.get('rsi_trend_buy_min', 55):.1f} SELL≤{c.get('rsi_trend_sell_max', 45):.1f}\n"
-        f"• RSI climax OB/OS: {c.get('rsi_climax_overbought', 70):.1f}/{c.get('rsi_climax_oversold', 30):.1f}\n\n"
+        f"• RSI climax OB/OS: {c.get('rsi_climax_overbought', 80):.1f}/{c.get('rsi_climax_oversold', 20):.1f}\n"
+        f"• Hút lực từ đỉnh: {'ON' if float(c.get('profit_protect_enabled', 1.0)) >= 0.5 else 'OFF'} | start {c.get('profit_protect_start_roi', 10.0):.1f}% ROI | tụt {c.get('profit_protect_pullback_roi', 8.0):.1f}% ROI thì đóng\n\n"
         "💰 <b>QUẢN LÝ VỐN ĐẢO CHIỀU</b>\n"
         f"• Reverse capital multiplier: {c['reverse_capital_multiplier']:.2f}\n"
         f"• Max reverse balance %: {c['max_reverse_balance_percent']:.1f}%\n"
@@ -1808,7 +1815,7 @@ class BaseBot:
 
         tp_sl_info = f" | TP: {self.tp}%" if self.tp else " | TP: Tắt"
         tp_sl_info += f" | SL: {self.sl}%" if self.sl else " | SL: Tắt"
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: speed-only theo khung nến chọn | Đảo chiều khi tín hiệu ngược đủ chuẩn{tp_sl_info}")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: market regime + speed | Đảo chiều khi tín hiệu ngược đủ chuẩn{tp_sl_info}")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1946,6 +1953,7 @@ class BaseBot:
             'failed_attempts': 0,
             'margin_used': 0.0,
             'reverse_count': 0,
+            'best_roi': None,
             'added_time': time.time()
         }
         # Đăng ký WebSocket giá
@@ -2165,6 +2173,20 @@ class BaseBot:
         else:
             roi = (entry - current_price) / entry * 100 * self.lev
 
+        # Hút lực từ đỉnh: nếu ROI đã lên đủ cao rồi tụt khỏi đỉnh một khoảng cố định thì chốt, không đảo.
+        if float(_STRATEGY_CONFIG.get('profit_protect_enabled', 1.0)) >= 0.5:
+            best_roi = data.get('best_roi')
+            if best_roi is None:
+                best_roi = roi
+            best_roi = max(float(best_roi), float(roi))
+            data['best_roi'] = best_roi
+            start_roi = float(_STRATEGY_CONFIG.get('profit_protect_start_roi', 10.0))
+            pullback_roi = float(_STRATEGY_CONFIG.get('profit_protect_pullback_roi', 8.0))
+            if best_roi >= start_roi and (best_roi - roi) >= pullback_roi:
+                self.log(f"🔒 {symbol} - Hút lực từ đỉnh: ROI đỉnh {best_roi:.2f}% tụt còn {roi:.2f}%, đóng lệnh bảo vệ lời")
+                self._close_symbol_position(symbol, reason="Profit protect peak pullback")
+                return
+
         if self.tp and roi >= self.tp:
             self.log(f"🎯 {symbol} - Đạt TP {self.tp}%, đóng lệnh")
             self._close_symbol_position(symbol, reason=f"TP {self.tp}%")
@@ -2356,6 +2378,7 @@ class BaseBot:
                         'last_trade_time': time.time(),
                         'margin_used': required_usd,
                         'reverse_count': int(reverse_count) if is_reverse else 0,
+                        'best_roi': 0.0,
                     })
 
                     self.bot_coordinator.bot_has_coin(self.bot_id)
@@ -2371,7 +2394,7 @@ class BaseBot:
                                f"💰 Đòn bẩy: {self.lev}x\n")
                     if self.tp: message += f"🎯 TP: {self.tp}% | "
                     if self.sl: message += f"🛡️ SL: {self.sl}%"
-                    message += f"\n🔄 Thoát: Khi tín hiệu speed-only ngược đủ chuẩn thì đóng và đảo ngay hoặc TP/SL"
+                    message += f"\n🔄 Thoát: Tín hiệu ngược đủ chuẩn thì đảo ngay; có hút lực từ đỉnh hoặc TP/SL"
                     self.log(message)
                     return True
                 else:
@@ -2466,6 +2489,7 @@ class BaseBot:
                 'qty': 0,
                 'status': 'closed',
                 'margin_used': 0.0,
+                'best_roi': None,
             })
             self.symbol_data[symbol]['last_close_time'] = time.time()
             # Không còn last_candle_check
@@ -2922,6 +2946,9 @@ class BotManager:
             '✏️ Reverse capital multiplier': ('reverse_capital_multiplier', 'Lệnh đảo chiều = vốn lệnh vừa đóng * hệ số. Ví dụ 1.1, 1.3, 1.5'),
             '✏️ Max reverse balance %': ('max_reverse_balance_percent', 'Giới hạn vốn đảo chiều tối đa theo số dư khả dụng. Ví dụ 70, 80, 90'),
             '✏️ Max reverse count': ('max_reverse_count', 'Số lần đảo chiều liên tiếp tối đa trước khi dừng coin để tránh sideway. Ví dụ 1, 2, 3'),
+            '✏️ Profit protect ON/OFF': ('profit_protect_enabled', '1 = bật hút lực từ đỉnh, 0 = tắt.'),
+            '✏️ Profit start ROI': ('profit_protect_start_roi', 'ROI tối thiểu để bắt đầu bảo vệ lợi nhuận. Ví dụ 10, 20, 30.'),
+            '✏️ Profit pullback ROI': ('profit_protect_pullback_roi', 'Khi ROI tụt khỏi đỉnh bao nhiêu % thì đóng. Ví dụ 5, 8, 10.'),
         }
 
         if text == "📊 Danh sách Bot":
@@ -3215,21 +3242,21 @@ class BotManager:
 
             success = self.add_bot(
                 symbol=symbol, lev=leverage, percent=percent, tp=tp, sl=sl,
-                strategy_type="TimeframeSpeedOnlyStrategy",
+                strategy_type="MarketRegimeSpeedStrategy",
                 bot_mode=bot_mode, bot_count=bot_count
             )
 
             if success:
                 success_msg = (
-                    f"✅ <b>ĐÃ TẠO BOT SPEED-ONLY THÀNH CÔNG</b>\n\n"
-                    f"🤖 Chiến lược: speed-only theo khung nến được chọn\n"
+                    f"✅ <b>ĐÃ TẠO BOT MARKET REGIME + SPEED THÀNH CÔNG</b>\n\n"
+                    f"🤖 Chiến lược: market regime + speed + profit protect\n"
                     f"🔧 Chế độ: {bot_mode}\n"
                     f"🔢 Số bot: {bot_count}\n"
                     f"💰 Đòn bẩy: {leverage}x\n"
                     f"📊 % Số dư: {percent}%\n"
                     f"🎯 TP: {tp if tp else 'Tắt'}\n"
                     f"🛡️ SL: {sl if sl else 'Tắt'}\n"
-                    f"🔄 Thoát: cùng tín hiệu speed-only, ngược hướng đủ chuẩn thì đảo ngay\n"
+                    f"🔄 Thoát: tín hiệu ngược đủ chuẩn thì đảo ngay; có hút lực từ đỉnh để bảo vệ lời\n"
                     f"⚖️ Cân bằng/lọc coin: Đã bỏ\n\n"
                     f"{get_strategy_config_text()}"
                 )
