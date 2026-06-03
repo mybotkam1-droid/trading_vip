@@ -122,6 +122,28 @@ def setup_logging():
 
 logger = setup_logging()
 
+# ========== CACHE DỮ LIỆU TÍN HIỆU SPEED PATTERN ==========
+# Cache REST rất ngắn để tránh gọi Binance lặp liên tục khi quét nhiều coin.
+# Quan trọng: cache có giới hạn và tự dọn, không sinh vô hạn.
+_SIGNAL_DATA_CACHE = {}
+_SIGNAL_DATA_CACHE_TTL = 1.5
+_SIGNAL_DATA_CACHE_MAX_SIZE = 1000
+
+def _cleanup_signal_data_cache():
+    try:
+        now = time.time()
+        expired = [k for k, v in list(_SIGNAL_DATA_CACHE.items())
+                   if now - float(v.get('ts', 0) or 0) > max(_SIGNAL_DATA_CACHE_TTL * 10, 30)]
+        for k in expired:
+            _SIGNAL_DATA_CACHE.pop(k, None)
+        if len(_SIGNAL_DATA_CACHE) > _SIGNAL_DATA_CACHE_MAX_SIZE:
+            items = sorted(_SIGNAL_DATA_CACHE.items(), key=lambda kv: float(kv[1].get('ts', 0) or 0))
+            for k, _ in items[:len(_SIGNAL_DATA_CACHE) - _SIGNAL_DATA_CACHE_MAX_SIZE]:
+                _SIGNAL_DATA_CACHE.pop(k, None)
+    except Exception:
+        pass
+
+
 def escape_html(text):
     if not text: return text
     return html.escape(text)
@@ -1213,6 +1235,7 @@ def _fetch_rest_1m15m_signal_data(symbol):
         closed5 = data[-6:-1]
         prev = closed5[-1]
         result = (curr, prev, None, closed5)
+        _cleanup_signal_data_cache()
         _SIGNAL_DATA_CACHE[key] = {'ts': now, 'data': result}
         return result
     except Exception as e:
