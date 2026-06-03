@@ -245,6 +245,24 @@ def create_strategy_config_keyboard():
         "one_time_keyboard": False
     }
 
+
+
+def create_strategy_value_keyboard():
+    """Bàn phím nhập giá trị tham số chiến lược.
+    Giữ đơn giản để tránh lỗi Telegram khi đang ở trạng thái waiting_strategy_value.
+    """
+    return {
+        "keyboard": [
+            [{"text": "0"}, {"text": "0.05"}, {"text": "0.10"}],
+            [{"text": "0.20"}, {"text": "0.25"}, {"text": "0.30"}],
+            [{"text": "1"}, {"text": "1.10"}, {"text": "1.20"}],
+            [{"text": "1m"}, {"text": "3m"}, {"text": "5m"}, {"text": "15m"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
 def _wait_for_rate_limit():
     global _BINANCE_LAST_REQUEST_TIME
     with _BINANCE_RATE_LOCK:
@@ -2688,7 +2706,7 @@ class BotManager:
             if text == '📊 Xem tham số chiến lược':
                 send_telegram(get_strategy_config_text(), chat_id=chat_id, reply_markup=create_strategy_config_keyboard(),
                              bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-            elif text == '🔄 Reset chiến lược':
+            elif text in ('🔄 Reset chiến lược', '♻️ Reset tham số chiến lược'):
                 _STRATEGY_CONFIG.reset()
                 send_telegram("✅ Đã reset tham số chiến lược về mặc định.\n\n" + get_strategy_config_text(),
                              chat_id=chat_id, reply_markup=create_strategy_config_keyboard(),
