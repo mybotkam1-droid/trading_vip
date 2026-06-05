@@ -230,14 +230,9 @@ def create_strategy_config_keyboard():
     return {
         "keyboard": [
             [{"text": "📊 Xem tham số chiến lược"}],
-            [{"text": "✏️ Signal timeframe"}, {"text": "✏️ AI speed ON/OFF"}],
-            [{"text": "✏️ Explore ON/OFF"}, {"text": "✏️ Min elapsed seconds"}],
-            [{"text": "✏️ Speed norm min"}, {"text": "✏️ AI min samples"}],
-            [{"text": "✏️ AI win rate"}, {"text": "✏️ AI expectancy ROI"}],
-            [{"text": "✏️ AI reverse edge"}, {"text": "✏️ AI history train"}],
-            [{"text": "✏️ AI history limit"}, {"text": "✏️ AI history horizon"}],
-            [{"text": "✏️ AI train TP"}, {"text": "✏️ AI train SL"}],
-            [{"text": "✏️ AI retrain seconds"}],
+            [{"text": "✏️ Current timeframe"}, {"text": "✏️ Compare timeframe"}],
+            [{"text": "✏️ Min elapsed seconds"}, {"text": "✏️ Speed reach factor"}],
+            [{"text": "✏️ Speed up factor"}, {"text": "✏️ Speed down factor"}],
             [{"text": "✏️ Low volume filter"}, {"text": "✏️ Min 24h volume"}],
             [{"text": "✏️ Profit protect ON/OFF"}, {"text": "✏️ Profit start ROI"}],
             [{"text": "✏️ Profit pullback ROI"}],
@@ -249,23 +244,21 @@ def create_strategy_config_keyboard():
     }
 
 
-
 def create_strategy_value_keyboard():
-    """Bàn phím nhập giá trị tham số chiến lược.
-    Giữ đơn giản để tránh lỗi Telegram khi đang ở trạng thái waiting_strategy_value.
-    """
+    """Bàn phím nhập giá trị tham số chiến lược."""
     return {
         "keyboard": [
-            [{"text": "0"}, {"text": "0.05"}, {"text": "0.10"}],
-            [{"text": "0.20"}, {"text": "0.25"}, {"text": "0.30"}],
-            [{"text": "1"}, {"text": "1.10"}, {"text": "1.20"}],
+            [{"text": "0"}, {"text": "0.25"}, {"text": "0.50"}],
+            [{"text": "0.80"}, {"text": "1.00"}, {"text": "1.20"}],
             [{"text": "1.50"}, {"text": "2.00"}, {"text": "3.00"}],
             [{"text": "1m"}, {"text": "3m"}, {"text": "5m"}, {"text": "15m"}],
+            [{"text": "30m"}, {"text": "1h"}, {"text": "2h"}, {"text": "4h"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
         "resize_keyboard": True,
         "one_time_keyboard": True
     }
+
 
 def _wait_for_rate_limit():
     global _BINANCE_LAST_REQUEST_TIME
@@ -662,45 +655,24 @@ def _interval_seconds(interval=None):
     return float(_BINANCE_INTERVAL_SECONDS.get(_normalize_interval(interval), 60.0))
 
 class StrategyConfig:
-    """Cấu hình chiến lược SPEED PATTERN 5+1, vốn theo % số dư margin."""
+    """Cấu hình chiến lược SPEED 2 KHUNG NẾN: chỉ dùng tốc độ volume/time."""
     DEFAULTS = {
-        'signal_interval': '1m',
+        'current_interval': '1m',
+        'compare_interval': '1m',
         'timeframe_seconds': 60.0,
         'min_elapsed_seconds': 6.0,
-        'body_ratio_min': 0.25,
-        'speed_edge_tolerance': 0.05,
-        'current_vs_low_factor': 1.20,
-        'strong_decline_factor': 2.00,
-        'current_vs_recent_factor': 1.00,
-        'speed_mid_factor': 1.00,
-        'speed_peak_upper_factor': 1.00,
-        'choppy_pattern_enabled': 1.0,
-        'peak_pullback_enabled': 1.0,
+        'volume_reach_factor': 0.50,   # giữ tên cũ, nhưng ý nghĩa mới: current_speed phải đạt tối thiểu 50% previous_speed
+        'speed_up_factor': 1.00,       # current_speed > prev_speed * factor => tăng tốc
+        'speed_down_factor': 1.00,     # current_speed < prev_speed * factor => giảm tốc
         'low_volume_filter_enabled': 1.0,
         'min_24h_volume': 10000000.0,
         'profit_protect_enabled': 1.0,
         'profit_protect_start_roi': 10.0,
         'profit_protect_pullback_roi': 8.0,
         'max_reverse_count': 10,
-        # AI SPEED LEARNER: chỉ dùng tốc độ nến hiện tại + thống kê kết quả lệnh
-        'ai_speed_enabled': 1.0,
-        'ai_explore_enabled': 1.0,
-        'ai_min_elapsed_seconds': 6.0,
-        'ai_speed_norm_min': 1.20,
-        'ai_min_samples': 8,
-        'ai_min_win_rate': 0.55,
-        'ai_min_expectancy_roi': 1.0,
-        'ai_reverse_edge_roi': 2.0,
-        # Train nhanh bằng lịch sử thật của chính coin trước khi xét tín hiệu.
-        'ai_history_training_enabled': 1.0,
-        'ai_history_limit': 120,
-        'ai_history_horizon_candles': 3,
-        'ai_history_tp_roi': 20.0,
-        'ai_history_sl_roi': 15.0,
-        'ai_retrain_interval_seconds': 1800.0,
     }
-    INT_KEYS = {'max_reverse_count', 'ai_min_samples', 'ai_history_limit', 'ai_history_horizon_candles'}
-    STRING_KEYS = {'signal_interval'}
+    INT_KEYS = {'max_reverse_count'}
+    STRING_KEYS = {'current_interval', 'compare_interval', 'signal_interval'}
 
     def __init__(self):
         self._config = self.DEFAULTS.copy()
@@ -708,20 +680,26 @@ class StrategyConfig:
 
     def get(self, key, default=None):
         with self._lock:
+            if key == 'signal_interval':
+                return self._config.get('current_interval', default)
             return self._config.get(key, default)
 
     def get_all(self):
         with self._lock:
-            return self._config.copy()
+            d = self._config.copy()
+            d['signal_interval'] = d.get('current_interval', '1m')
+            return d
 
     def update(self, **kwargs):
         with self._lock:
             for key, value in kwargs.items():
+                if key == 'signal_interval':
+                    key = 'current_interval'
                 if key in self._config and value is not None:
                     if key in self.STRING_KEYS:
                         value = _normalize_interval(value)
                         self._config[key] = value
-                        if key == 'signal_interval':
+                        if key == 'current_interval':
                             self._config['timeframe_seconds'] = _interval_seconds(value)
                     elif key in self.INT_KEYS:
                         self._config[key] = int(float(value))
@@ -738,371 +716,30 @@ _STRATEGY_CONFIG = StrategyConfig()
 
 def get_strategy_config_text():
     c = _STRATEGY_CONFIG.get_all()
-    signal_interval = _normalize_interval(c.get('signal_interval', '1m'))
+    current_interval = _normalize_interval(c.get('current_interval', '1m'))
+    compare_interval = _normalize_interval(c.get('compare_interval', '1m'))
     return (
-        "🎯 <b>THAM SỐ AI SPEED LEARNER</b>\n\n"
-        f"• Signal timeframe: {signal_interval} ({_interval_seconds(signal_interval):.0f}s)\n"
-        f"• AI speed learner: {'ON' if c.get('ai_speed_enabled', 1.0) >= 0.5 else 'OFF'}\n"
-        f"• Explore khi chưa đủ dữ liệu: {'ON' if c.get('ai_explore_enabled', 1.0) >= 0.5 else 'OFF'}\n"
-        f"• Min elapsed: {c.get('ai_min_elapsed_seconds', 6.0):.1f}s\n"
-        f"• Speed norm tối thiểu: {c.get('ai_speed_norm_min', 1.2):.2f}x\n"
-        f"• Min samples/context: {int(c.get('ai_min_samples', 8))}\n"
-        f"• Win rate tối thiểu: {c.get('ai_min_win_rate', 0.55):.2f}\n"
-        f"• Expectancy ROI tối thiểu: {c.get('ai_min_expectancy_roi', 1.0):.2f}%\n"
-        f"• Reverse edge ROI: {c.get('ai_reverse_edge_roi', 2.0):.2f}%\n"
-        f"• Train lịch sử khi gặp coin: {'ON' if c.get('ai_history_training_enabled', 1.0) >= 0.5 else 'OFF'} | limit {int(c.get('ai_history_limit', 120))} nến | horizon {int(c.get('ai_history_horizon_candles', 3))} nến\n"
-        f"• TP/SL train: TP {c.get('ai_history_tp_roi', 20.0):.1f}% ROI = thắng | SL {c.get('ai_history_sl_roi', 15.0):.1f}% ROI = thua | retrain {c.get('ai_retrain_interval_seconds', 1800.0):.0f}s\n"
-        f"• Khi train: khóa 1 coin/lần, in tiến độ mỗi 10%, train xong giải phóng dữ liệu nến.\n"
+        "🎯 <b>THAM SỐ SPEED 2 KHUNG NẾN</b>\n\n"
+        f"• Current candle timeframe: {current_interval} ({_interval_seconds(current_interval):.0f}s)\n"
+        f"• Compare closed candle timeframe: {compare_interval} ({_interval_seconds(compare_interval):.0f}s)\n"
+        f"• Min elapsed seconds: {c.get('min_elapsed_seconds', 6.0):.1f}s\n"
+        f"• Speed reach factor: {c.get('volume_reach_factor', 0.5):.2f}x tốc độ nến so sánh\n"
+        f"• Speed up factor: {c.get('speed_up_factor', 1.0):.2f}x\n"
+        f"• Speed down factor: {c.get('speed_down_factor', 1.0):.2f}x\n"
         f"• Low volume filter: {'ON' if c.get('low_volume_filter_enabled', 1.0) >= 0.5 else 'OFF'} | min 24h volume: {c.get('min_24h_volume', 0):,.0f}\n"
         f"• Hút lực từ đỉnh: {'ON' if float(c.get('profit_protect_enabled', 1.0)) >= 0.5 else 'OFF'} | start {c.get('profit_protect_start_roi', 10.0):.1f}% ROI | tụt {c.get('profit_protect_pullback_roi', 8.0):.1f}% ROI thì đóng\n\n"
         "💰 <b>QUẢN LÝ VỐN</b>\n"
         "• Mỗi lệnh, kể cả đảo chiều: tính theo % số dư margin hiện tại.\n"
         "• TP/SL tính theo ROI đã nhân đòn bẩy.\n\n"
-        "Luồng AI mới:\n"
-        "1) Không dùng mẫu C1..C5, EMA/RSI hay market regime để quyết định hướng.\n"
-        "2) Chỉ đo tốc độ nến hiện tại: projected_volume = volume_current / progress.\n"
-        "3) Chuẩn hóa tốc độ theo volume 24h trung bình của chính coin để so sánh công bằng.\n"
-        "4) AI lưu thống kê thắng/thua/ROI theo từng nhóm tốc độ + hướng nến hiện tại.\n"
-        "5) Khi context đã đủ dữ liệu, AI chỉ vào nếu win-rate và expectancy đạt kỳ vọng TP.\n"
-        "6) Nếu chưa đủ dữ liệu và Explore ON, bot được vào thử để học, nhưng vẫn theo lọc volume thấp.\n"
-        "7) Khi đang có lệnh, nếu AI cho thấy hướng ngược có expectancy tốt hơn rõ ràng, bot sẽ đảo."
+        "Luồng tín hiệu mới:\n"
+        "1) Lấy nến hiện tại theo Current timeframe và nến đã đóng gần nhất theo Compare timeframe.\n"
+        "2) Tốc độ = volume / thời gian. Nến hiện tại dùng elapsed thực tế, nến đã đóng dùng độ dài khung nến.\n"
+        "3) Điều kiện tăng tốc: current_speed = volume hiện tại / thời gian đã chạy; previous_speed = tốc độ nến so sánh / độ dài khung nến. Không so raw volume giữa 1m và 15m/1h.\n"
+        "4) Hai nến cùng chiều + tăng tốc → vào theo hướng nến hiện tại.\n"
+        "5) Hai nến cùng chiều + giảm tốc → vào ngược hướng nến hiện tại.\n"
+        "6) Hai nến khác chiều + nến hiện tại tăng tốc → vào theo hướng nến hiện tại.\n"
+        "7) Còn lại None. Khi đóng để đảo chiều thì đóng và đảo luôn, không kiểm tra lại lần hai."
     )
-
-
-_AI_STATS_PATH = os.environ.get('AI_SPEED_STATS_PATH', '/data/ai_speed_stats.json' if os.path.isdir('/data') else 'ai_speed_stats.json')
-_AI_STATS_LOCK = threading.RLock()
-_AI_STATS = None
-_AI_LAST_CONTEXT_BY_SYMBOL = {}
-
-def _load_ai_stats():
-    global _AI_STATS
-    with _AI_STATS_LOCK:
-        if _AI_STATS is not None:
-            return _AI_STATS
-        try:
-            if os.path.exists(_AI_STATS_PATH):
-                with open(_AI_STATS_PATH, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if isinstance(data, dict):
-                        _AI_STATS = data
-                        return _AI_STATS
-        except Exception as e:
-            logger.warning(f"⚠️ Không đọc được AI stats: {e}")
-        _AI_STATS = {'version': 1, 'contexts': {}}
-        return _AI_STATS
-
-def _save_ai_stats():
-    with _AI_STATS_LOCK:
-        try:
-            data = _load_ai_stats()
-            tmp = _AI_STATS_PATH + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, _AI_STATS_PATH)
-        except Exception as e:
-            logger.warning(f"⚠️ Không lưu được AI stats: {e}")
-
-def _ai_bucket_speed_norm(x):
-    try:
-        x = float(x)
-    except Exception:
-        x = 0.0
-    if x < 1.0: return 's<1'
-    if x < 1.5: return 's1_1.5'
-    if x < 2.0: return 's1.5_2'
-    if x < 3.0: return 's2_3'
-    if x < 5.0: return 's3_5'
-    if x < 8.0: return 's5_8'
-    return 's8+'
-
-def _ai_bucket_elapsed(progress):
-    try:
-        p = float(progress)
-    except Exception:
-        p = 0.0
-    if p < 0.15: return 'e_early'
-    if p < 0.50: return 'e_mid'
-    return 'e_late'
-
-def _ai_bucket_body_ratio(body_ratio):
-    try:
-        b = float(body_ratio)
-    except Exception:
-        b = 0.0
-    if b < 0.25: return 'b_low'
-    if b < 0.55: return 'b_mid'
-    return 'b_high'
-
-def _get_coin_24h_volume(symbol):
-    try:
-        sym = symbol.upper()
-        for coin in get_coins_with_info():
-            if coin.get('symbol') == sym:
-                return float(coin.get('volume') or 0.0)
-    except Exception:
-        pass
-    return 0.0
-
-def _ai_make_context(symbol, interval, current_side, speed_norm, progress, body_ratio):
-    return '|'.join([
-        _normalize_interval(interval),
-        str(current_side or 'NONE'),
-        _ai_bucket_speed_norm(speed_norm),
-        _ai_bucket_elapsed(progress),
-        _ai_bucket_body_ratio(body_ratio),
-    ])
-
-def _ai_context_stats(key, side):
-    data = _load_ai_stats()
-    ctx = data.setdefault('contexts', {}).setdefault(key, {})
-    st = ctx.setdefault(side, {'n': 0, 'wins': 0, 'losses': 0, 'sum_roi': 0.0, 'best_roi': -999999.0, 'worst_roi': 999999.0})
-    n = int(st.get('n', 0) or 0)
-    wins = int(st.get('wins', 0) or 0)
-    avg_roi = float(st.get('sum_roi', 0.0) or 0.0) / n if n > 0 else 0.0
-    win_rate = wins / n if n > 0 else 0.0
-    return st, n, win_rate, avg_roi
-
-def _ai_update_stats(key, side, roi):
-    if not key or side not in ('BUY', 'SELL'):
-        return
-    try:
-        roi = float(roi)
-    except Exception:
-        return
-    with _AI_STATS_LOCK:
-        st, _, _, _ = _ai_context_stats(key, side)
-        st['n'] = int(st.get('n', 0) or 0) + 1
-        if roi > 0:
-            st['wins'] = int(st.get('wins', 0) or 0) + 1
-        else:
-            st['losses'] = int(st.get('losses', 0) or 0) + 1
-        st['sum_roi'] = float(st.get('sum_roi', 0.0) or 0.0) + roi
-        st['best_roi'] = max(float(st.get('best_roi', -999999.0)), roi)
-        st['worst_roi'] = min(float(st.get('worst_roi', 999999.0)), roi)
-        _save_ai_stats()
-
-
-_AI_TRAIN_LOCK = threading.RLock()
-_AI_TRAINED_SYMBOLS = {}
-_AI_TRAINING_SYMBOL = None
-_AI_TRAIN_MAX_STATS_CONTEXTS = 20000
-
-def _ai_prune_stats_if_needed():
-    """Giới hạn stats để chạy Railway không phình RAM/file vô hạn."""
-    try:
-        data = _load_ai_stats()
-        contexts = data.setdefault('contexts', {})
-        max_ctx = int(os.environ.get('AI_SPEED_MAX_CONTEXTS', _AI_TRAIN_MAX_STATS_CONTEXTS))
-        if len(contexts) <= max_ctx:
-            return
-        # context ít mẫu nhất bị bỏ trước
-        def sample_count(item):
-            ctx = item[1] or {}
-            return sum(int((ctx.get(side) or {}).get('n', 0) or 0) for side in ('BUY', 'SELL'))
-        items = sorted(contexts.items(), key=sample_count)
-        remove_n = len(contexts) - max_ctx
-        for k, _ in items[:remove_n]:
-            contexts.pop(k, None)
-    except Exception as e:
-        logger.warning(f"⚠️ Không prune được AI stats: {e}")
-
-def _ai_update_stats_memory(key, side, roi):
-    """Cập nhật stats trong RAM, không lưu file mỗi mẫu; dùng cho batch historical training."""
-    if not key or side not in ('BUY', 'SELL'):
-        return
-    try:
-        roi = float(roi)
-    except Exception:
-        return
-    data = _load_ai_stats()
-    ctx = data.setdefault('contexts', {}).setdefault(key, {})
-    st = ctx.setdefault(side, {'n': 0, 'wins': 0, 'losses': 0, 'sum_roi': 0.0, 'best_roi': -999999.0, 'worst_roi': 999999.0})
-    st['n'] = int(st.get('n', 0) or 0) + 1
-    if roi > 0:
-        st['wins'] = int(st.get('wins', 0) or 0) + 1
-    else:
-        st['losses'] = int(st.get('losses', 0) or 0) + 1
-    st['sum_roi'] = float(st.get('sum_roi', 0.0) or 0.0) + roi
-    st['best_roi'] = max(float(st.get('best_roi', -999999.0)), roi)
-    st['worst_roi'] = min(float(st.get('worst_roi', 999999.0)), roi)
-
-def _ai_backtest_roi_from_future(entry_price, side, future_candles, leverage, tp_roi, sl_roi):
-    """Dùng nến lịch sử thật để gắn nhãn: bên nào chạm TP/SL trước hoặc ROI cuối kỳ."""
-    try:
-        entry = float(entry_price)
-        lev = max(float(leverage or 1), 1.0)
-        tp_roi = float(tp_roi)
-        sl_roi = abs(float(sl_roi))
-        if entry <= 0:
-            return 0.0
-        last_close = entry
-        for c in future_candles:
-            high = _candle_get(c, 'high', 2)
-            low = _candle_get(c, 'low', 3)
-            close = _candle_get(c, 'close', 4)
-            last_close = close
-            if side == 'BUY':
-                best_roi = (high - entry) / entry * 100.0 * lev
-                worst_roi = (low - entry) / entry * 100.0 * lev
-            else:
-                best_roi = (entry - low) / entry * 100.0 * lev
-                worst_roi = (entry - high) / entry * 100.0 * lev
-            # Khi cùng một nến chạm cả TP và SL không biết thứ tự nội bộ, chọn bảo thủ: SL trước.
-            if worst_roi <= -sl_roi:
-                return -sl_roi
-            if best_roi >= tp_roi:
-                return tp_roi
-        if side == 'BUY':
-            return (last_close - entry) / entry * 100.0 * lev
-        return (entry - last_close) / entry * 100.0 * lev
-    except Exception:
-        return 0.0
-
-def _ai_train_symbol_from_history(symbol, leverage=10, progress_callback=None):
-    """
-    Train nhẹ bằng lịch sử thật của 1 coin, sau đó giải phóng dữ liệu nến.
-    Không train nhiều coin cùng lúc: dùng _AI_TRAIN_LOCK.
-    """
-    global _AI_TRAINING_SYMBOL
-    cfg = _STRATEGY_CONFIG.get_all()
-
-    def _notify_train(msg):
-        try:
-            logger.info(msg)
-            if progress_callback:
-                progress_callback(msg)
-        except Exception:
-            pass
-    if float(cfg.get('ai_history_training_enabled', 1.0)) < 0.5:
-        return False
-    symbol = symbol.upper()
-    interval = _normalize_interval(cfg.get('signal_interval', '1m'))
-    now = time.time()
-    retrain_sec = float(cfg.get('ai_retrain_interval_seconds', 1800.0))
-    trained_key = (symbol, interval)
-    with _AI_TRAIN_LOCK:
-        last_ts = float(_AI_TRAINED_SYMBOLS.get(trained_key, 0.0) or 0.0)
-        if now - last_ts < retrain_sec:
-            return True
-        _AI_TRAINING_SYMBOL = symbol
-        train_started = time.time()
-        try:
-            limit = max(20, int(cfg.get('ai_history_limit', 120)))
-            horizon = max(1, int(cfg.get('ai_history_horizon_candles', 3)))
-            fetch_limit = min(1500, limit + horizon + 5)
-            _notify_train(f"🔄 AI đang train {symbol} {interval} | limit={limit} nến | horizon={horizon} | TP={float(cfg.get('ai_history_tp_roi', 20.0)):.1f}% ROI | SL={float(cfg.get('ai_history_sl_roi', 15.0)):.1f}% ROI")
-            url = "https://fapi.binance.com/fapi/v1/klines"
-            data = binance_api_request(url, params={"symbol": symbol, "interval": interval, "limit": fetch_limit})
-            if not data or len(data) < horizon + 10:
-                _AI_TRAINED_SYMBOLS[trained_key] = now
-                _notify_train(f"⚠️ AI train {symbol}: không đủ nến lịch sử")
-                return False
-            tf_seconds = _interval_seconds(interval)
-            v24 = _get_coin_24h_volume(symbol)
-            candles_per_day = 86400.0 / tf_seconds if tf_seconds > 0 else 1440.0
-            avg_speed = (v24 / candles_per_day) if v24 > 0 else 0.0
-            if avg_speed <= 0:
-                vols = [_volume_speed(c) for c in data[:-horizon]]
-                avg_speed = (sum(vols) / len(vols)) if vols else 0.0
-            if avg_speed <= 0:
-                _AI_TRAINED_SYMBOLS[trained_key] = now
-                _notify_train(f"⚠️ AI train {symbol}: không tính được tốc độ trung bình")
-                return False
-            start_i = max(1, len(data) - horizon - limit)
-            end_i = len(data) - horizon
-            samples = 0
-            total_steps = max(1, end_i - start_i)
-            next_progress = 10
-            with _AI_STATS_LOCK:
-                _load_ai_stats()
-                for idx, i in enumerate(range(start_i, end_i), start=1):
-                    progress_pct = int(idx * 100 / total_steps)
-                    if progress_pct >= next_progress:
-                        elapsed_train = max(time.time() - train_started, 0.001)
-                        speed_train = idx / elapsed_train
-                        _notify_train(f"📊 AI train {symbol}: {min(progress_pct,100)}% | {idx}/{total_steps} nến | {speed_train:.1f} nến/s")
-                        next_progress += 10
-                    c = data[i]
-                    open_p = _candle_get(c, 'open', 1)
-                    close_p = _candle_get(c, 'close', 4)
-                    high_p = _candle_get(c, 'high', 2)
-                    low_p = _candle_get(c, 'low', 3)
-                    raw_side = _candle_direction(open_p, close_p)
-                    if not raw_side:
-                        continue
-                    rng = high_p - low_p
-                    body_ratio = abs(close_p - open_p) / rng if rng > 0 else 0.0
-                    speed_norm = _volume_speed(c) / avg_speed
-                    key = _ai_make_context(symbol, interval, raw_side, speed_norm, 1.0, body_ratio)
-                    future = data[i + 1:i + 1 + horizon]
-                    if len(future) < horizon:
-                        continue
-                    entry_price = close_p
-                    tp_roi = float(cfg.get('ai_history_tp_roi', 20.0))
-                    sl_roi = abs(float(cfg.get('ai_history_sl_roi', 15.0)))
-                    buy_roi = _ai_backtest_roi_from_future(entry_price, 'BUY', future, leverage, tp_roi, sl_roi)
-                    sell_roi = _ai_backtest_roi_from_future(entry_price, 'SELL', future, leverage, tp_roi, sl_roi)
-                    # Train test strict: chạm TP = 1 lần thắng, chạm SL = 1 lần thua.
-                    # Nếu trong horizon không chạm TP/SL thì bỏ mẫu, không lấy ROI cuối để tránh nhiễu thống kê.
-                    used = False
-                    if buy_roi >= tp_roi:
-                        _ai_update_stats_memory(key, 'BUY', tp_roi); used = True
-                    elif buy_roi <= -sl_roi:
-                        _ai_update_stats_memory(key, 'BUY', -sl_roi); used = True
-                    if sell_roi >= tp_roi:
-                        _ai_update_stats_memory(key, 'SELL', tp_roi); used = True
-                    elif sell_roi <= -sl_roi:
-                        _ai_update_stats_memory(key, 'SELL', -sl_roi); used = True
-                    if used:
-                        samples += 1
-                _ai_prune_stats_if_needed()
-                _save_ai_stats()
-            _AI_TRAINED_SYMBOLS[trained_key] = now
-            elapsed_train = max(time.time() - train_started, 0.001)
-            _notify_train(f"✅ AI train xong {symbol} {interval}: {samples} mẫu TP/SL | {elapsed_train:.1f}s | đã giải phóng dữ liệu nến")
-            return samples > 0
-        except Exception as e:
-            _notify_train(f"⚠️ AI train lịch sử lỗi {symbol}: {e}")
-            _AI_TRAINED_SYMBOLS[trained_key] = now
-            return False
-        finally:
-            # Giải phóng dữ liệu lớn ngay sau khi train để hợp Railway.
-            try:
-                del data
-            except Exception:
-                pass
-            _AI_TRAINING_SYMBOL = None
-            try:
-                import gc
-                gc.collect()
-            except Exception:
-                pass
-
-def _ai_decide_side(symbol, interval, raw_side, speed_norm, progress, body_ratio):
-    """Trả về (signal, reason, context_key). AI chọn BUY/SELL dựa trên thống kê context hiện tại."""
-    cfg = _STRATEGY_CONFIG.get_all()
-    if float(cfg.get('ai_speed_enabled', 1.0)) < 0.5:
-        return raw_side, 'ai_disabled_follow_raw', None
-    if not raw_side:
-        return None, 'no_raw_direction', None
-    if float(speed_norm) < float(cfg.get('ai_speed_norm_min', 1.2)):
-        return None, f'speed_norm_low {speed_norm:.2f}x', None
-    key = _ai_make_context(symbol, interval, raw_side, speed_norm, progress, body_ratio)
-    candidates = []
-    for side in ('BUY', 'SELL'):
-        st, n, wr, avg_roi = _ai_context_stats(key, side)
-        candidates.append((side, n, wr, avg_roi))
-    min_samples = int(cfg.get('ai_min_samples', 8))
-    min_wr = float(cfg.get('ai_min_win_rate', 0.55))
-    min_ev = float(cfg.get('ai_min_expectancy_roi', 1.0))
-    valid = [(side, n, wr, ev) for side, n, wr, ev in candidates if n >= min_samples and wr >= min_wr and ev >= min_ev]
-    if valid:
-        valid.sort(key=lambda x: (x[3], x[2], x[1]), reverse=True)
-        side, n, wr, ev = valid[0]
-        return side, f'ai_stats_ok side={side} n={n} win_rate={wr:.2f} ev_roi={ev:.2f}% speed_norm={speed_norm:.2f}x', key
-    if float(cfg.get('ai_explore_enabled', 1.0)) >= 0.5:
-        return raw_side, f'ai_explore raw={raw_side} speed_norm={speed_norm:.2f}x stats={[ (s,n,round(wr,2),round(ev,2)) for s,n,wr,ev in candidates ]}', key
-    return None, f'ai_no_edge stats={[ (s,n,round(wr,2),round(ev,2)) for s,n,wr,ev in candidates ]}', key
 
 def _candle_direction(open_price, close_price):
     if close_price > open_price:
@@ -1183,55 +820,91 @@ def _near_lowest(value, values, tolerance):
 
 def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_curr,
                         prev_candle, market_candle=None, progress=1.0,
-                        mode='entry', recent_1m_history=None, market_history=None, symbol=None):
+                        mode='entry', recent_1m_history=None, market_history=None):
     """
-    AI SPEED LEARNER:
-    - Không dùng mẫu 5 nến, EMA/RSI hay market regime để quyết định hướng.
-    - Chỉ dùng tốc độ nến hiện tại: projected_volume = volume_current / progress.
-    - Chuẩn hóa tốc độ bằng volume 24h trung bình theo khung nến để không bị lệch giữa coin lớn/nhỏ.
-    - AI thống kê win/loss/ROI theo context rồi quyết định BUY/SELL/None.
+    Chiến lược SPEED 2 KHUNG NẾN:
+    - Nến hiện tại theo current_interval, tốc độ = volume_current / elapsed_seconds.
+    - Nến so sánh là nến đã đóng gần nhất theo compare_interval, tốc độ = volume_prev / compare_interval_seconds.
+    - 3 trường hợp:
+      1) Cùng chiều + tăng tốc => theo hướng nến hiện tại.
+      2) Cùng chiều + giảm tốc => đảo ngược hướng nến hiện tại.
+      3) Khác chiều + nến hiện tại tăng tốc => theo hướng nến hiện tại.
+      Còn lại None.
     """
     try:
         cfg = _STRATEGY_CONFIG.get_all()
-        interval = _normalize_interval(cfg.get('signal_interval', '1m'))
-        tf_seconds = _interval_seconds(interval)
+        current_interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
+        compare_interval = _normalize_interval(cfg.get('compare_interval', current_interval))
+        current_tf = _interval_seconds(current_interval)
+        compare_tf = _interval_seconds(compare_interval)
         progress = max(float(progress), 0.001)
-        elapsed = progress * tf_seconds
-        min_elapsed = float(cfg.get('ai_min_elapsed_seconds', cfg.get('min_elapsed_seconds', 6.0)))
+        elapsed = progress * current_tf
+        min_elapsed = float(cfg.get('min_elapsed_seconds', 6.0))
         if elapsed < min_elapsed:
             return None, 0, f'elapsed_too_early_{elapsed:.1f}s need={min_elapsed:.1f}s', False
 
-        raw_side = _candle_direction(float(open_curr), float(current_price))
-        if not raw_side:
+        if not prev_candle:
+            return None, 0, 'missing_compare_closed_candle', False
+
+        prev_open = _candle_get(prev_candle, 'open', 1)
+        prev_close = _candle_get(prev_candle, 'close', 4)
+        prev_volume = _candle_get(prev_candle, 'volume', 5)
+        if prev_volume <= 0:
+            return None, 0, 'bad_previous_volume', False
+
+        current_side = _candle_direction(float(open_curr), float(current_price))
+        prev_side = _candle_direction(prev_open, prev_close)
+        if not current_side:
             return None, 0, 'current_flat_no_direction', False
+        if not prev_side:
+            return None, 0, 'previous_flat_no_direction', False
 
-        rng = float(high_curr) - float(low_curr)
-        body_ratio = abs(float(current_price) - float(open_curr)) / rng if rng > 0 else 0.0
-        projected_speed = float(volume_curr) / progress
-        if projected_speed <= 0:
-            return None, 0, 'bad_current_speed', False
+        current_speed = float(volume_curr) / max(elapsed, 0.001)
+        previous_speed = float(prev_volume) / max(compare_tf, 0.001)
+        # Lưu ý quan trọng:
+        # Không so raw volume giữa nến hiện tại và nến so sánh, vì current_tf có thể là 1m
+        # còn compare_tf có thể là 15m/1h. Tất cả phải quy đổi về tốc độ volume/giây.
+        # Giữ tên key volume_reach_factor để không vỡ menu/config cũ, nhưng ý nghĩa là
+        # current_speed phải đạt tối thiểu X lần previous_speed.
+        speed_reach_factor = float(cfg.get('volume_reach_factor', 0.50))
+        speed_up_factor = float(cfg.get('speed_up_factor', 1.00))
+        speed_down_factor = float(cfg.get('speed_down_factor', 1.00))
 
-        sym = (symbol or '')
-        v24 = _get_coin_24h_volume(sym) if sym else 0.0
-        candles_per_day = 86400.0 / tf_seconds if tf_seconds > 0 else 1440.0
-        avg_speed_from_24h = (v24 / candles_per_day) if v24 > 0 else 0.0
-        if avg_speed_from_24h > 0:
-            speed_norm = projected_speed / avg_speed_from_24h
+        speed_reached = current_speed >= previous_speed * speed_reach_factor
+        speed_up = current_speed > previous_speed * speed_up_factor and speed_reached
+        speed_down = current_speed < previous_speed * speed_down_factor
+
+        signal = None
+        case = None
+        if current_side == prev_side:
+            if speed_up:
+                signal = current_side
+                case = 'SAME_SIDE_SPEED_UP_FOLLOW_CURRENT'
+            elif speed_down:
+                signal = _opposite_side(current_side)
+                case = 'SAME_SIDE_SPEED_DOWN_REVERSE'
         else:
-            # Fallback khi chưa có volume24h: dùng tốc độ tuyệt đối, chỉ để không crash.
-            speed_norm = projected_speed
+            if speed_up:
+                signal = current_side
+                case = 'OPPOSITE_SIDE_CURRENT_FASTER_FOLLOW_CURRENT'
 
-        signal, ai_reason, ctx_key = _ai_decide_side(sym, interval, raw_side, speed_norm, progress, body_ratio)
-        if sym:
-            _AI_LAST_CONTEXT_BY_SYMBOL[sym.upper()] = {'key': ctx_key, 'signal': signal, 'raw_side': raw_side, 'speed_norm': speed_norm, 'reason': ai_reason, 'ts': time.time()}
+        if signal is None:
+            return None, 0, (
+                f'no_speed_case current_side={current_side} prev_side={prev_side} '
+                f'volume_current={float(volume_curr):.4f} volume_prev={prev_volume:.4f} speed_reached={speed_reached} '
+                f'cur_speed={current_speed:.8f} prev_speed={previous_speed:.8f}'
+            ), False
+
         reason = (
-            f'ai_speed_current | interval={interval} elapsed={elapsed:.1f}s progress={progress:.3f} '
-            f'raw_side={raw_side} projected_speed={projected_speed:.4f} v24={v24:.2f} '
-            f'speed_norm={speed_norm:.2f}x body_ratio={body_ratio:.2f} signal={signal} | {ai_reason}'
+            f'speed_2tf_ok | case={case} current_tf={current_interval} compare_tf={compare_interval} '
+            f'elapsed={elapsed:.1f}s progress={progress:.3f} '
+            f'volume_current={float(volume_curr):.4f} volume_prev={prev_volume:.4f} speed_reached={speed_reached} '
+            f'current_speed={current_speed:.8f} prev_speed={previous_speed:.8f} '
+            f'current_side={current_side} prev_side={prev_side} final_signal={signal}'
         )
-        return signal, 1 if signal else 0, reason, False
+        return signal, 1, reason, False
     except Exception as e:
-        logger.error(f"Lỗi AI speed signal: {e}")
+        logger.error(f"Lỗi chấm điểm tín hiệu speed 2tf: {e}")
         return None, 0, 'error', False
 
 def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
@@ -1244,29 +917,38 @@ def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
     }
 
 def _fetch_rest_1m15m_signal_data(symbol):
-    """Tên cũ giữ để tương thích: lấy current + previous + 5 nến đóng theo signal_interval."""
+    """Tên cũ giữ để tương thích: lấy nến hiện tại theo current_interval và nến đã đóng theo compare_interval."""
     try:
         cfg = _STRATEGY_CONFIG.get_all()
-        signal_interval = _normalize_interval(cfg.get('signal_interval', '1m'))
+        current_interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
+        compare_interval = _normalize_interval(cfg.get('compare_interval', current_interval))
         symbol = symbol.upper()
         now = time.time()
-        key = (symbol, signal_interval)
+        key = (symbol, current_interval, compare_interval)
         cached = _SIGNAL_DATA_CACHE.get(key)
         if cached and now - cached.get('ts', 0) < _SIGNAL_DATA_CACHE_TTL:
             return cached['data']
+
         url = "https://fapi.binance.com/fapi/v1/klines"
-        data = binance_api_request(url, params={"symbol": symbol, "interval": signal_interval, "limit": 6})
-        if not data or len(data) < 6:
+        curr_data = binance_api_request(url, params={"symbol": symbol, "interval": current_interval, "limit": 2})
+        if not curr_data or len(curr_data) < 2:
             return None, None, None, []
-        curr = data[-1]
-        closed5 = data[-6:-1]
-        prev = closed5[-1]
-        result = (curr, prev, None, closed5)
+        curr = curr_data[-1]  # nến hiện tại đang chạy theo current_interval
+
+        if compare_interval == current_interval:
+            prev = curr_data[-2]  # nến đóng gần nhất cùng khung
+        else:
+            cmp_data = binance_api_request(url, params={"symbol": symbol, "interval": compare_interval, "limit": 2})
+            if not cmp_data or len(cmp_data) < 2:
+                return None, None, None, []
+            prev = cmp_data[-2]  # nến đã đóng gần nhất theo khung so sánh
+
+        result = (curr, prev, None, [])
         _cleanup_signal_data_cache()
         _SIGNAL_DATA_CACHE[key] = {'ts': now, 'data': result}
         return result
     except Exception as e:
-        logger.error(f"Lỗi REST lấy dữ liệu speed pattern {symbol}: {e}")
+        logger.error(f"Lỗi REST lấy dữ liệu speed 2tf {symbol}: {e}")
         return None, None, None, []
 
 def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, recent_1m_history=None):
@@ -1279,8 +961,7 @@ def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, r
         progress = _safe_progress(curr_candle, _interval_seconds(_STRATEGY_CONFIG.get('signal_interval', '1m')))
         signal, score, reason, _ = _score_signal_parts(
             open_curr, close_curr, high_curr, low_curr, volume_curr,
-            prev_candle, prev15m_candle, progress=progress, mode='entry', recent_1m_history=recent_1m_history, market_history=recent_1m_history,
-            symbol=(curr_candle.get('symbol') if isinstance(curr_candle, dict) else None)
+            prev_candle, prev15m_candle, progress=progress, mode='entry', recent_1m_history=recent_1m_history, market_history=recent_1m_history
         )
         return signal
     except Exception as e:
@@ -1513,10 +1194,7 @@ class SmartCoinFinder:
                 logger.warning("⚠️ Cache coin trống, không thể tìm coin.")
                 return None
 
-            # Chọn coin ngẫu nhiên để tránh lúc nào cũng quét theo cùng thứ tự.
-            coins = coins[:]
             random.shuffle(coins)
-
             for coin in coins:
                 symbol = coin['symbol']
                 if symbol in _SYMBOL_BLACKLIST:
@@ -1531,17 +1209,6 @@ class SmartCoinFinder:
                     continue
                 if self._bot_manager and self._bot_manager.coin_manager.is_coin_active(symbol):
                     continue
-
-                # Train lịch sử thật cho đúng 1 coin tại một thời điểm, train xong giải phóng nến.
-                # Nếu đã train gần đây thì hàm sẽ bỏ qua rất nhanh.
-                try:
-                    _ai_train_symbol_from_history(
-                        symbol,
-                        leverage=self.bot_leverage,
-                        progress_callback=(self._bot_manager.log if self._bot_manager else None)
-                    )
-                except Exception as _train_e:
-                    logger.warning(f"⚠️ Bỏ qua lỗi train AI {symbol}: {_train_e}")
 
                 signal = None
                 if self._bot_manager and hasattr(self._bot_manager, 'kline_manager'):
@@ -1657,7 +1324,7 @@ class RealtimeKlineManager:
         self.callbacks = defaultdict(list)
 
     def _current_interval(self):
-        return _normalize_interval(_STRATEGY_CONFIG.get('signal_interval', '1m'))
+        return _normalize_interval(_STRATEGY_CONFIG.get('current_interval', _STRATEGY_CONFIG.get('signal_interval', '1m')))
 
     def add_symbol(self, symbol, callback):
         symbol = symbol.upper()
@@ -1860,7 +1527,7 @@ class BaseBot:
 
         tp_sl_info = f" | TP: {self.tp}%" if self.tp else " | TP: Tắt"
         tp_sl_info += f" | SL: {self.sl}%" if self.sl else " | SL: Tắt"
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: AI speed current learner | Đảo chiều khi tín hiệu ngược đủ chuẩn{tp_sl_info}")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: speed 2 khung nến | Đảo chiều khi tín hiệu ngược đủ chuẩn{tp_sl_info}")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1951,9 +1618,6 @@ class BaseBot:
 
             if symbol_info['position_open']:
                 self._check_symbol_tp_sl(symbol)
-                # Nếu TP/SL hoặc hút lực từ đỉnh vừa đóng lệnh thì không kiểm tra đảo chiều nữa.
-                if not symbol_info.get('position_open'):
-                    return False
                 self._check_realtime_exit(symbol)
                 return False
             else:
@@ -2051,8 +1715,7 @@ class BaseBot:
             progress = _safe_progress(current_candle, _interval_seconds(_STRATEGY_CONFIG.get('signal_interval', '1m')))
             signal, score, reason, is_spike = _score_signal_parts(
                 open_curr, current_price, float(current_candle['high']), float(current_candle['low']), float(current_candle['volume']),
-                prev_candle, prev15_candle, progress=progress, mode=mode, recent_1m_history=recent_1m_history,
-                symbol=symbol
+                prev_candle, prev15_candle, progress=progress, mode=mode, recent_1m_history=recent_1m_history
             )
             details = {'signal': signal, 'score': score, 'reason': reason, 'is_spike': is_spike, 'progress': progress}
             return details if return_details else signal
@@ -2086,6 +1749,24 @@ class BaseBot:
                         self.kline_manager.candle_data[symbol] = rest_candle
                         self.kline_manager.prev_candle_data[symbol] = rest_prev
 
+            # Nếu khung so sánh khác khung hiện tại, prev của websocket không đúng khung.
+            # Lấy nến đã đóng gần nhất của compare_interval qua REST/cache nhưng vẫn giữ candle realtime hiện tại nếu có.
+            cfg = _STRATEGY_CONFIG.get_all()
+            current_interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
+            compare_interval = _normalize_interval(cfg.get('compare_interval', current_interval))
+            if compare_interval != current_interval:
+                rest_curr_raw, rest_prev_raw, _, _ = _fetch_rest_1m15m_signal_data(symbol)
+                if rest_prev_raw:
+                    prev = rest_prev_raw
+                if not candle and rest_curr_raw:
+                    candle = {
+                        'symbol': symbol.upper(), 'interval': current_interval,
+                        'open': float(rest_curr_raw[1]), 'high': float(rest_curr_raw[2]), 'low': float(rest_curr_raw[3]),
+                        'close': float(rest_curr_raw[4]), 'volume': float(rest_curr_raw[5]),
+                        'is_final': False, 'time': int(rest_curr_raw[0]), 'close_time': int(rest_curr_raw[6]),
+                        'update_ts': time.time()
+                    }
+
             if not candle or not prev:
                 details = {'signal': None, 'score': 0, 'reason': 'missing_candles', 'is_spike': False}
                 self.realtime_signal[symbol] = None
@@ -2116,8 +1797,8 @@ class BaseBot:
             curr, prev, market, market_history = _fetch_rest_1m15m_signal_data(symbol)
             if not curr or not prev:
                 return None, None, None, []
-            interval = _normalize_interval(_STRATEGY_CONFIG.get('signal_interval', '1m'))
-            market_interval = _normalize_interval(_STRATEGY_CONFIG.get('market_interval', '15m'))
+            interval = _normalize_interval(_STRATEGY_CONFIG.get('current_interval', _STRATEGY_CONFIG.get('signal_interval', '1m')))
+            market_interval = _normalize_interval(_STRATEGY_CONFIG.get('compare_interval', interval))
             def conv(arr, is_final, used_interval):
                 return {
                     'symbol': symbol.upper(), 'interval': used_interval,
@@ -2260,18 +1941,6 @@ class BaseBot:
                     except Exception:
                         prev_margin_used = 0.0
                 close_side = "SELL" if side == "BUY" else "BUY"
-                # Tính ROI đã nhân đòn bẩy để cập nhật AI stats khi lệnh đóng.
-                ai_roi = None
-                try:
-                    entry_price_for_ai = float(self.symbol_data[symbol].get('entry', 0) or 0)
-                    price_for_ai = self._get_fresh_price(symbol)
-                    if entry_price_for_ai > 0 and price_for_ai > 0:
-                        if side == 'BUY':
-                            ai_roi = (price_for_ai - entry_price_for_ai) / entry_price_for_ai * 100 * self.lev
-                        else:
-                            ai_roi = (entry_price_for_ai - price_for_ai) / entry_price_for_ai * 100 * self.lev
-                except Exception:
-                    ai_roi = None
 
                 cancel_all_orders(symbol, self.api_key, self.api_secret)
                 time.sleep(1)
@@ -2280,13 +1949,6 @@ class BaseBot:
                 invalidate_position_cache(symbol, self.api_key)
                 if result and 'orderId' in result:
                     self.log(f"🔴 Đã đóng vị thế {symbol} | Lý do: {reason}")
-                    try:
-                        ctx_key = self.symbol_data[symbol].get('ai_context_key')
-                        ai_side = self.symbol_data[symbol].get('ai_signal_side') or side
-                        if ctx_key and ai_roi is not None:
-                            _ai_update_stats(ctx_key, ai_side, ai_roi)
-                    except Exception as e:
-                        logger.warning(f"⚠️ Không cập nhật AI stats {symbol}: {e}")
                     time.sleep(1)
                     self._reset_symbol_position(symbol)
 
@@ -2419,8 +2081,6 @@ class BaseBot:
                         'margin_used': required_usd,
                         'reverse_count': int(reverse_count) if is_reverse else 0,
                         'best_roi': 0.0,
-                        'ai_context_key': (_AI_LAST_CONTEXT_BY_SYMBOL.get(symbol.upper(), {}) or {}).get('key'),
-                        'ai_signal_side': side,
                     })
 
                     self.bot_coordinator.bot_has_coin(self.bot_id)
@@ -2968,23 +2628,15 @@ class BotManager:
         current_step = user_state.get('step')
 
         strategy_key_map = {
-            '✏️ Signal timeframe': ('signal_interval', 'Khung nến đo tốc độ hiện tại. Ví dụ: 1m, 3m, 5m, 15m.'),
-            '✏️ AI speed ON/OFF': ('ai_speed_enabled', '1 = bật AI speed learner, 0 = tắt'),
-            '✏️ Explore ON/OFF': ('ai_explore_enabled', '1 = cho bot vào thử khi chưa đủ dữ liệu, 0 = chỉ vào khi stats đủ edge'),
-            '✏️ Min elapsed seconds': ('ai_min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét. Ví dụ 6, 10, 15.'),
-            '✏️ Speed norm min': ('ai_speed_norm_min', 'Tốc độ nến hiện tại tối thiểu so với trung bình coin. Ví dụ 1.2, 1.5, 2.0'),
-            '✏️ AI min samples': ('ai_min_samples', 'Số mẫu tối thiểu/context trước khi tin thống kê. Ví dụ 8, 20, 50'),
-            '✏️ AI win rate': ('ai_min_win_rate', 'Win rate tối thiểu. Ví dụ 0.55, 0.60'),
-            '✏️ AI expectancy ROI': ('ai_min_expectancy_roi', 'Expectancy ROI tối thiểu. Ví dụ 1, 2, 5'),
-            '✏️ AI reverse edge': ('ai_reverse_edge_roi', 'Chênh expectancy ROI tối thiểu để đảo chiều. Ví dụ 1, 2, 5'),
-            '✏️ AI history train': ('ai_history_training_enabled', '1 = bật train lịch sử mỗi coin, 0 = tắt'),
-            '✏️ AI history limit': ('ai_history_limit', 'Số nến lịch sử thật train mỗi coin. Ví dụ 20, 100, 200'),
-            '✏️ AI history horizon': ('ai_history_horizon_candles', 'Số nến tương lai để gắn nhãn TP/SL lịch sử. Ví dụ 2, 3, 5'),
-            '✏️ AI train TP': ('ai_history_tp_roi', 'TP ROI train. Chạm TP = 1 thắng. Ví dụ 10, 20, 30'),
-            '✏️ AI train SL': ('ai_history_sl_roi', 'SL ROI train. Chạm SL = 1 thua. Ví dụ 10, 15, 20'),
-            '✏️ AI retrain seconds': ('ai_retrain_interval_seconds', 'Sau bao lâu mới train lại cùng coin. Ví dụ 600, 1800, 3600'),
+            '✏️ Current timeframe': ('current_interval', 'Khung nến hiện tại để đo tốc độ realtime. Ví dụ: 1m, 3m, 5m, 15m.'),
+            '✏️ Compare timeframe': ('compare_interval', 'Khung nến đã đóng gần nhất để so sánh tốc độ. Ví dụ: 1m, 15m, 1h.'),
+            '✏️ Signal timeframe': ('current_interval', 'Tên cũ: khung nến hiện tại để đo tốc độ realtime.'),
+            '✏️ Min elapsed seconds': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét. Ví dụ 6, 10, 15.'),
+            '✏️ Speed reach factor': ('volume_reach_factor', 'Tốc độ nến hiện tại phải đạt tối thiểu bao nhiêu lần tốc độ nến so sánh. Ví dụ 0.50.'),
+            '✏️ Speed up factor': ('speed_up_factor', 'Current speed phải lớn hơn previous speed bao nhiêu lần để coi là tăng tốc. Ví dụ 1.0, 1.2.'),
+            '✏️ Speed down factor': ('speed_down_factor', 'Current speed nhỏ hơn previous speed bao nhiêu lần để coi là giảm tốc. Ví dụ 1.0, 0.8.'),
             '✏️ Low volume filter': ('low_volume_filter_enabled', '1 = bật lọc coin volume 24h thấp; 0 = tắt'),
-            '✏️ Min 24h volume': ('min_24h_volume', 'Volume 24h tối thiểu của coin. Ví dụ 10000000, 50000000'),
+            '✏️ Min 24h volume': ('min_24h_volume', 'Volume 24h tối thiểu của coin để bot động chọn. Ví dụ 10000000, 50000000'),
             '✏️ Profit protect ON/OFF': ('profit_protect_enabled', '1 = bật hút lực từ đỉnh, 0 = tắt.'),
             '✏️ Profit start ROI': ('profit_protect_start_roi', 'ROI tối thiểu để bắt đầu bảo vệ lợi nhuận. Ví dụ 10, 20, 30.'),
             '✏️ Profit pullback ROI': ('profit_protect_pullback_roi', 'Khi ROI tụt khỏi đỉnh bao nhiêu % thì đóng. Ví dụ 5, 8, 10.'),
@@ -3100,19 +2752,16 @@ class BotManager:
                 return
             try:
                 key = user_state.get('strategy_key')
-                if key in ('signal_interval', 'market_interval'):
+                if key in ('signal_interval', 'current_interval', 'compare_interval', 'market_interval'):
                     val = _normalize_interval(text)
                     if val != text.strip().lower():
                         raise ValueError
                     _STRATEGY_CONFIG.update(**{key: val})
                 else:
                     val = float(text)
-                    if key in ('entry_score', 'exit_score', 'breakout_lookback', 'max_reverse_count', 'ai_min_samples', 'ai_history_limit', 'ai_history_horizon_candles'):
+                    if key in ('entry_score', 'exit_score', 'breakout_lookback', 'max_reverse_count'):
                         val = int(val)
-                        if val < 0 or val > 5000:
-                            raise ValueError
-                    elif key in ('ai_speed_enabled', 'ai_explore_enabled', 'ai_history_training_enabled', 'low_volume_filter_enabled', 'profit_protect_enabled'):
-                        if val not in (0, 1):
+                        if val < 0 or val > 50:
                             raise ValueError
                     elif key == 'max_reverse_balance_percent':
                         if not (0 < val <= 100):
