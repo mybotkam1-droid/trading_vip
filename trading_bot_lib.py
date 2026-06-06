@@ -973,12 +973,18 @@ def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_cu
                 f'cur_speed={current_speed:.8f} prev_speed={previous_speed:.8f} current_final={bool(current_is_final)} raw_slow={speed_down_raw}'
             ), False
 
+        # Đảo ngược tín hiệu theo yêu cầu:
+        # Tất cả điều kiện tốc độ vẫn giữ nguyên, chỉ đảo hướng cuối cùng trước khi vào/đảo lệnh.
+        raw_signal = signal
+        signal = _opposite_side(raw_signal)
+        case = f'{case}_INVERTED'
+
         reason = (
             f'speed_2tf_ok | case={case} current_tf={current_interval} compare_tf={compare_interval} '
             f'elapsed={elapsed:.1f}s progress={progress:.3f} '
             f'volume_current={float(volume_curr):.4f} volume_prev={prev_volume:.4f} speed_reached={speed_reached} '
             f'current_speed={current_speed:.8f} prev_speed={previous_speed:.8f} current_final={bool(current_is_final)} '
-            f'current_side={current_side} prev_side={prev_side} final_signal={signal}'
+            f'current_side={current_side} prev_side={prev_side} raw_signal={raw_signal} final_signal={signal}'
         )
         return signal, 1, reason, False
     except Exception as e:
