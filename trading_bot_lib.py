@@ -1064,6 +1064,9 @@ def has_open_position(symbol, api_key, api_secret):
 _POSITION_CACHE = {}
 _POSITION_CACHE_LOCK = threading.RLock()
 _POSITION_CACHE_TTL = 8.0
+_POSITION_SYNC_INTERVAL = 2.0  # khi đang có vị thế, sync API mỗi ~2s để phát hiện lệnh đóng ngoài Binance nhanh hơn
+_POSITION_CLOSE_CONFIRM_TIMEOUT = 4.0
+_POSITION_CLOSE_CONFIRM_INTERVAL = 0.4
 
 def get_position_cached(symbol, api_key, api_secret, ttl=_POSITION_CACHE_TTL, force=False):
     symbol = symbol.upper()
@@ -1672,6 +1675,12 @@ class BaseBot:
                 return False
 
             if symbol_info['position_open']:
+                # Đồng bộ vị thế thật với Binance trước khi xét TP/SL/đảo chiều.
+                # Việc này giúp bot biết nhanh khi người dùng đóng lệnh trực tiếp trên Binance,
+                # tránh local vẫn tưởng còn vị thế rồi tính TP/SL hoặc mở đảo sai.
+                if not self._sync_symbol_position(symbol):
+                    return False
+
                 self._check_symbol_tp_sl(symbol)
                 # Nếu TP/SL hoặc profit protect vừa đóng lệnh thì không xét đảo chiều tiếp trong cùng vòng.
                 if not symbol_info.get('position_open'):
@@ -2007,8 +2016,19 @@ class BaseBot:
                 result = place_order(symbol, close_side, qty, self.api_key, self.api_secret)
                 invalidate_position_cache(symbol, self.api_key)
                 if result and 'orderId' in result:
+                    closed_ok, last_pos = self._wait_until_position_closed(symbol)
+                    if not closed_ok:
+                        remain_amt = 0.0
+                        try:
+                            remain_amt = abs(float(last_pos.get('positionAmt', 0) or 0)) if last_pos else 0.0
+                        except Exception:
+                            remain_amt = 0.0
+                        if remain_amt > 0:
+                            self.log(f"⚠️ {symbol} - Lệnh đóng đã gửi nhưng Binance vẫn báo còn vị thế {remain_amt}. Không reset local, sẽ kiểm tra lại vòng sau.")
+                            self._sync_symbol_position(symbol, force=True)
+                            return False
+
                     self.log(f"🔴 Đã đóng vị thế {symbol} | Lý do: {reason}")
-                    time.sleep(1)
                     self._reset_symbol_position(symbol)
 
                     if "Candle opposite" in reason:
@@ -2034,7 +2054,15 @@ class BaseBot:
 
                     return True
                 else:
-                    self.log(f"❌ Đóng lệnh {symbol} thất bại")
+                    err_text = ''
+                    try:
+                        err_text = f" | Phản hồi: {result}" if result else " | Không có phản hồi từ Binance"
+                    except Exception:
+                        err_text = ''
+                    # Nếu đóng thất bại vì thực tế vị thế đã không còn, đồng bộ lại ngay.
+                    if not self._sync_symbol_position(symbol, force=True):
+                        return True
+                    self.log(f"❌ Đóng lệnh {symbol} thất bại{err_text}")
                     return False
 
             except Exception as e:
@@ -2198,6 +2226,78 @@ class BaseBot:
             data['last_price'] = price
             data['last_price_time'] = time.time()
         return price
+
+    def _sync_symbol_position(self, symbol, force=False):
+        """Đồng bộ local position với Binance khi bot đang giữ lệnh.
+
+        Trả về True nếu Binance xác nhận vẫn còn vị thế.
+        Trả về False nếu vị thế đã đóng/mất, đồng thời reset local và dừng coin.
+        """
+        try:
+            if symbol not in self.symbol_data:
+                return False
+            data = self.symbol_data[symbol]
+            if not data.get('position_open'):
+                return False
+
+            now = time.time()
+            last_sync = float(data.get('last_position_api_sync', 0) or 0)
+            if not force and (now - last_sync) < _POSITION_SYNC_INTERVAL:
+                return True
+            data['last_position_api_sync'] = now
+
+            invalidate_position_cache(symbol, self.api_key)
+            pos = get_position_cached(symbol, self.api_key, self.api_secret, ttl=0.0, force=True)
+            amt = 0.0
+            entry_price = 0.0
+            if pos:
+                amt = float(pos.get('positionAmt', 0) or 0)
+                entry_price = float(pos.get('entryPrice', 0) or 0)
+
+            if abs(amt) <= 0:
+                self.log(f"ℹ️ {symbol} - Binance xác nhận vị thế đã đóng/mất, đồng bộ local và dừng coin.")
+                self._reset_symbol_position(symbol)
+                self._blacklist_and_stop_symbol(symbol, reason="position closed outside bot")
+                return False
+
+            real_side = 'BUY' if amt > 0 else 'SELL'
+            local_side = data.get('side')
+            if local_side in ('BUY', 'SELL') and real_side != local_side:
+                self.log(f"⚠️ {symbol} - Binance side {real_side} khác local {local_side}, đồng bộ lại theo Binance")
+
+            data.update({
+                'position_open': True,
+                'qty': amt,
+                'side': real_side,
+                'status': 'open'
+            })
+            if entry_price > 0:
+                data['entry'] = entry_price
+                data['entry_base'] = entry_price
+            return True
+        except Exception as e:
+            logger.error(f"Lỗi sync vị thế {symbol}: {str(e)}")
+            # Nếu lỗi API tạm thời thì không reset bừa, giữ local để tránh mất kiểm soát.
+            return True
+
+    def _wait_until_position_closed(self, symbol, timeout=None, interval=None):
+        """Sau khi gửi lệnh đóng, poll Binance vài lần để chắc chắn positionAmt về 0."""
+        timeout = _POSITION_CLOSE_CONFIRM_TIMEOUT if timeout is None else float(timeout)
+        interval = _POSITION_CLOSE_CONFIRM_INTERVAL if interval is None else float(interval)
+        deadline = time.time() + timeout
+        last_pos = None
+        while time.time() < deadline:
+            try:
+                invalidate_position_cache(symbol, self.api_key)
+                pos = get_position_cached(symbol, self.api_key, self.api_secret, ttl=0.0, force=True)
+                last_pos = pos
+                amt = float(pos.get('positionAmt', 0) or 0) if pos else 0.0
+                if abs(amt) <= 0:
+                    return True, pos
+            except Exception:
+                pass
+            time.sleep(interval)
+        return False, last_pos
 
     def _force_check_position(self, symbol):
         try:
