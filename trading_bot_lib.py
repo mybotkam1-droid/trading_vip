@@ -230,14 +230,14 @@ def create_strategy_config_keyboard():
     return {
         "keyboard": [
             [{"text": "📊 Xem tham số chiến lược"}],
-            [{"text": "✏️ Current timeframe"}, {"text": "✏️ Compare timeframe"}],
-            [{"text": "✏️ Min elapsed seconds"}, {"text": "✏️ Speed up factor"}],
-            [{"text": "✏️ Min body ratio"}, {"text": "✏️ Min range pct"}],
-            [{"text": "✏️ Min body pct"}, {"text": "✏️ Flat zone lookback"}],
-            [{"text": "✏️ Min box range pct"}],
-            [{"text": "✏️ Low volume filter"}, {"text": "✏️ Min 24h volume"}],
-            [{"text": "✏️ Profit protect ON/OFF"}, {"text": "✏️ Profit start ROI"}],
-            [{"text": "✏️ Profit pullback ROI"}],
+            [{"text": "✏️ Khung nến tín hiệu"}, {"text": "✏️ Thời gian tối thiểu"}],
+            [{"text": "✏️ Hệ số thân nến"}],
+            [{"text": "✏️ Tỷ lệ thân nến tối thiểu"}, {"text": "✏️ Biên độ nến tối thiểu"}],
+            [{"text": "✏️ Thân nến tối thiểu"}, {"text": "✏️ Số nến vùng bẹt"}],
+            [{"text": "✏️ Biên độ vùng bẹt tối thiểu"}],
+            [{"text": "✏️ Lọc coin volume thấp"}, {"text": "✏️ Volume 24h tối thiểu"}],
+            [{"text": "✏️ Bảo vệ lợi nhuận"}, {"text": "✏️ ROI bắt đầu bảo vệ"}],
+            [{"text": "✏️ ROI tụt từ đỉnh để đóng"}],
             [{"text": "♻️ Reset tham số chiến lược"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
@@ -657,14 +657,15 @@ def _interval_seconds(interval=None):
     return float(_BINANCE_INTERVAL_SECONDS.get(_normalize_interval(interval), 60.0))
 
 class StrategyConfig:
-    """Cấu hình chiến lược SPEED 2 KHUNG NẾN: chỉ dùng tốc độ volume/time."""
+    """Cấu hình chiến lược BODY 1 KHUNG NẾN: so sánh chiều dài thân nến hiện tại với nến đã đóng gần nhất."""
     DEFAULTS = {
         'current_interval': '1m',
-        'compare_interval': '1m',
+        'compare_interval': '1m',  # giữ key cũ để tương thích; logic mới bắt buộc dùng cùng current_interval
+
         'timeframe_seconds': 60.0,
         'min_elapsed_seconds': 6.0,
         'volume_reach_factor': 0.0,    # giữ key cũ để tương thích, KHÔNG dùng trong logic mới
-        'speed_up_factor': 1.00,       # current_speed > previous_speed * factor => có tín hiệu theo hướng nến hiện tại
+        'speed_up_factor': 1.00,       # body_current > body_previous * factor => tín hiệu theo hướng nến hiện tại
         'speed_down_factor': 1.00,     # giữ key cũ để tương thích, KHÔNG dùng trong logic mới
         'body_ratio_min': 0.25,
         'min_range_pct': 0.08,
@@ -724,28 +725,26 @@ _STRATEGY_CONFIG = StrategyConfig()
 def get_strategy_config_text():
     c = _STRATEGY_CONFIG.get_all()
     current_interval = _normalize_interval(c.get('current_interval', '1m'))
-    compare_interval = _normalize_interval(c.get('compare_interval', '1m'))
     return (
-        "🎯 <b>THAM SỐ SPEED 2 KHUNG NẾN</b>\n\n"
-        f"• Current candle timeframe: {current_interval} ({_interval_seconds(current_interval):.0f}s)\n"
-        f"• Compare closed candle timeframe: {compare_interval} ({_interval_seconds(compare_interval):.0f}s)\n"
-        f"• Min elapsed seconds: {c.get('min_elapsed_seconds', 6.0):.1f}s\n"
-        f"• Speed factor: {c.get('speed_up_factor', 1.0):.2f}x tốc độ nến so sánh\n"
-        f"• Min body ratio: {c.get('body_ratio_min', 0.25):.2f}\n"
-        f"• Min range pct: {c.get('min_range_pct', 0.08):.3f}%\n"
-        f"• Min body pct: {c.get('min_body_pct', 0.03):.3f}%\n"
-        f"• Flat zone: lookback {int(c.get('flat_zone_lookback', 5))} nến | min box range {c.get('min_box_range_pct', 0.15):.3f}%\n"
-        f"• Low volume filter: {'ON' if c.get('low_volume_filter_enabled', 1.0) >= 0.5 else 'OFF'} | min 24h volume: {c.get('min_24h_volume', 0):,.0f}\n"
-        f"• Hút lực từ đỉnh: {'ON' if float(c.get('profit_protect_enabled', 1.0)) >= 0.5 else 'OFF'} | start {c.get('profit_protect_start_roi', 10.0):.1f}% ROI | tụt {c.get('profit_protect_pullback_roi', 8.0):.1f}% ROI thì đóng\n\n"
+        "🎯 <b>THAM SỐ CHIẾN LƯỢC THÂN NẾN 1 KHUNG</b>\n\n"
+        f"• Khung nến tín hiệu: {current_interval} ({_interval_seconds(current_interval):.0f}s)\n"
+        f"• Thời gian tối thiểu để xét nến hiện tại: {c.get('min_elapsed_seconds', 6.0):.1f}s\n"
+        f"• Hệ số thân nến: {c.get('speed_up_factor', 1.0):.2f}x thân nến đã đóng\n"
+        f"• Tỷ lệ thân nến tối thiểu: {c.get('body_ratio_min', 0.25):.2f}\n"
+        f"• Biên độ nến tối thiểu: {c.get('min_range_pct', 0.08):.3f}%\n"
+        f"• Thân nến tối thiểu: {c.get('min_body_pct', 0.03):.3f}%\n"
+        f"• Vùng bẹt: {int(c.get('flat_zone_lookback', 5))} nến | biên độ tối thiểu {c.get('min_box_range_pct', 0.15):.3f}%\n"
+        f"• Lọc coin volume thấp: {'BẬT' if c.get('low_volume_filter_enabled', 1.0) >= 0.5 else 'TẮT'} | volume 24h tối thiểu: {c.get('min_24h_volume', 0):,.0f}\n"
+        f"• Bảo vệ lợi nhuận: {'BẬT' if float(c.get('profit_protect_enabled', 1.0)) >= 0.5 else 'TẮT'} | bắt đầu {c.get('profit_protect_start_roi', 10.0):.1f}% ROI | tụt {c.get('profit_protect_pullback_roi', 8.0):.1f}% ROI thì đóng\n\n"
         "💰 <b>QUẢN LÝ VỐN</b>\n"
         "• Mỗi lệnh, kể cả đảo chiều: tính theo % số dư margin hiện tại.\n"
-        "• TP/SL tính theo ROI đã nhân đòn bẩy.\n\n"
+        "• TP/SL tính theo ROI đã nhân đòn bẩy và luôn đồng bộ vị thế thật từ Binance trước khi xét.\n\n"
         "Luồng tín hiệu mới:\n"
-        "1) Lấy nến hiện tại theo Current timeframe và nến đã đóng gần nhất theo Compare timeframe.\n"
-        "2) Tốc độ = volume / thời gian. Nến hiện tại dùng elapsed thực tế, nến đã đóng dùng độ dài khung nến.\n"
-        "3) Nếu current_speed > previous_speed * Speed factor thì có tín hiệu. Không còn nhánh quá cao để đảo, không còn nhánh giảm tốc/chậm.\n"
-        "4) Tín hiệu luôn theo hướng nến hiện tại: nến hiện tại xanh → BUY, đỏ → SELL.\n"
-        "5) Vẫn giữ lọc thân nến/range/doji/vùng bẹt như file hiện tại. Khi đóng để đảo chiều thì đóng và đảo luôn, không kiểm tra lại lần hai."
+        "1) Chỉ dùng một khung nến duy nhất. Nến hiện tại và nến đã đóng gần nhất bắt buộc cùng khung.\n"
+        "2) Nến đã đóng gần nhất phải không doji, đủ biên độ và đủ thân nến theo bộ lọc.\n"
+        "3) Nến hiện tại phải chạy đủ thời gian tối thiểu, không doji, đủ biên độ và đủ thân nến.\n"
+        "4) Nếu thân nến hiện tại > thân nến đã đóng gần nhất * hệ số thân nến thì vào theo hướng nến hiện tại.\n"
+        "5) Vẫn giữ lọc vùng bẹt/coin volume thấp. Khi đóng để đảo chiều thì đóng và đảo luôn, không kiểm tra lại lần hai."
     )
 
 def _candle_direction(open_price, close_price):
@@ -881,20 +880,17 @@ def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_cu
                         prev_candle, market_candle=None, progress=1.0,
                         mode='entry', recent_1m_history=None, market_history=None, current_is_final=False):
     """
-    Chiến lược SPEED 2 KHUNG NẾN - BẢN ĐƠN GIẢN:
-    - Chỉ dùng tốc độ volume/time.
-    - current_speed = volume_current / elapsed_seconds.
-    - previous_speed = volume_previous_closed / compare_interval_seconds.
-    - Nếu current_speed > previous_speed * speed_up_factor => vào theo hướng nến hiện tại.
-    - Không còn: đảo tín hiệu, speed_down, quá cao/climax, cùng chiều/khác chiều.
-    - Vẫn giữ bộ lọc nến hiện tại: doji/body/range; entry vẫn lọc thêm prev/flat zone.
+    Chiến lược THÂN NẾN 1 KHUNG:
+    - Nến hiện tại và nến đã đóng gần nhất luôn cùng một khung thời gian.
+    - Nến đã đóng gần nhất phải đủ chuẩn: không doji, đủ range/body.
+    - Nến hiện tại phải chạy đủ thời gian tối thiểu và đủ chuẩn.
+    - Nếu thân nến hiện tại > thân nến đã đóng gần nhất * hệ số => vào theo hướng nến hiện tại.
+    - Entry lọc thêm vùng bẹt; exit/đảo chiều không để vùng bẹt chặn đóng lệnh.
     """
     try:
         cfg = _STRATEGY_CONFIG.get_all()
         current_interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
-        compare_interval = _normalize_interval(cfg.get('compare_interval', current_interval))
         current_tf = _interval_seconds(current_interval)
-        compare_tf = _interval_seconds(compare_interval)
         progress = max(float(progress), 0.001)
         elapsed = progress * current_tf
         min_elapsed = float(cfg.get('min_elapsed_seconds', 6.0))
@@ -902,57 +898,53 @@ def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_cu
             return None, 0, f'elapsed_too_early_{elapsed:.1f}s need={min_elapsed:.1f}s', False
 
         if not prev_candle:
-            return None, 0, 'missing_compare_closed_candle', False
+            return None, 0, 'missing_previous_closed_candle', False
 
         prev_open = _candle_get(prev_candle, 'open', 1)
+        prev_high = _candle_get(prev_candle, 'high', 2)
+        prev_low = _candle_get(prev_candle, 'low', 3)
         prev_close = _candle_get(prev_candle, 'close', 4)
-        prev_volume = _candle_get(prev_candle, 'volume', 5)
-        if prev_volume <= 0:
-            return None, 0, 'bad_previous_volume', False
 
         current_side = _candle_direction(float(open_curr), float(current_price))
         if not current_side:
             return None, 0, 'current_flat_no_direction', False
 
+        prev_ok, prev_info = _is_tradeable_candle(prev_open, prev_close, prev_high, prev_low)
+        if not prev_ok:
+            return None, 0, f'previous_candle_not_tradeable {prev_info}', False
+
         current_ok, current_info = _is_tradeable_candle(open_curr, current_price, high_curr, low_curr)
         if not current_ok:
             return None, 0, f'current_candle_not_tradeable {current_info}', False
 
-        # Entry lọc chặt thêm nến so sánh và vùng bẹt để tránh vào coin/nến quá lì.
-        # Exit/đảo chiều chỉ yêu cầu nến hiện tại đủ chuẩn, tránh bị chặn đóng lệnh.
         if mode == 'entry':
-            prev_ok, prev_info = _is_tradeable_candle(prev_open, prev_close, _candle_get(prev_candle, 'high', 2), _candle_get(prev_candle, 'low', 3))
-            if not prev_ok:
-                return None, 0, f'previous_candle_not_tradeable {prev_info}', False
-
             flat_zone, flat_info = _is_flat_zone(recent_1m_history or [], current_price=current_price)
             if flat_zone:
                 return None, 0, f'flat_zone_block {flat_info}', False
 
-        current_speed = float(volume_curr) / max(elapsed, 0.001)
-        previous_speed = float(prev_volume) / max(compare_tf, 0.001)
-        speed_factor = float(cfg.get('speed_up_factor', 1.00))
-        is_fast = current_speed > previous_speed * speed_factor
+        prev_body = abs(float(prev_close) - float(prev_open))
+        current_body = abs(float(current_price) - float(open_curr))
+        body_factor = float(cfg.get('speed_up_factor', 1.00))
 
-        if not is_fast:
+        if prev_body <= 0:
+            return None, 0, 'bad_previous_body', False
+
+        if not (current_body > prev_body * body_factor):
             return None, 0, (
-                f'not_fast_enough current_side={current_side} '
-                f'volume_current={float(volume_curr):.4f} volume_prev={prev_volume:.4f} '
-                f'cur_speed={current_speed:.8f} prev_speed={previous_speed:.8f} '
-                f'speed_factor={speed_factor:.3f}'
+                f'body_not_large_enough current_side={current_side} '
+                f'current_body={current_body:.10f} prev_body={prev_body:.10f} '
+                f'body_factor={body_factor:.3f}'
             ), False
 
         signal = current_side
         reason = (
-            f'simple_speed_follow_ok | current_tf={current_interval} compare_tf={compare_interval} '
-            f'elapsed={elapsed:.1f}s progress={progress:.3f} '
-            f'volume_current={float(volume_curr):.4f} volume_prev={prev_volume:.4f} '
-            f'current_speed={current_speed:.8f} prev_speed={previous_speed:.8f} '
-            f'speed_factor={speed_factor:.3f} signal={signal}'
+            f'body_follow_ok | timeframe={current_interval} elapsed={elapsed:.1f}s progress={progress:.3f} '
+            f'current_body={current_body:.10f} prev_body={prev_body:.10f} '
+            f'body_factor={body_factor:.3f} signal={signal}'
         )
         return signal, 1, reason, False
     except Exception as e:
-        logger.error(f"Lỗi chấm điểm tín hiệu simple speed: {e}")
+        logger.error(f"Lỗi chấm điểm tín hiệu thân nến: {e}")
         return None, 0, 'error', False
 
 def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
@@ -965,44 +957,32 @@ def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
     }
 
 def _fetch_rest_1m15m_signal_data(symbol):
-    """Tên cũ giữ để tương thích: lấy nến hiện tại theo current_interval và nến đã đóng theo compare_interval."""
+    """Tên cũ giữ để tương thích: lấy nến hiện tại và nến đã đóng gần nhất cùng một khung tín hiệu."""
     try:
         cfg = _STRATEGY_CONFIG.get_all()
-        current_interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
-        compare_interval = _normalize_interval(cfg.get('compare_interval', current_interval))
+        interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
         symbol = symbol.upper()
         now = time.time()
-        key = (symbol, current_interval, compare_interval)
+        key = (symbol, interval, interval)
         cached = _SIGNAL_DATA_CACHE.get(key)
         if cached and now - cached.get('ts', 0) < _SIGNAL_DATA_CACHE_TTL:
             return cached['data']
 
         url = "https://fapi.binance.com/fapi/v1/klines"
-        curr_data = binance_api_request(url, params={"symbol": symbol, "interval": current_interval, "limit": 2})
-        if not curr_data or len(curr_data) < 2:
+        lookback = max(int(_STRATEGY_CONFIG.get('flat_zone_lookback', 5)) + 3, 8)
+        data = binance_api_request(url, params={"symbol": symbol, "interval": interval, "limit": lookback + 1})
+        if not data or len(data) < 2:
             return None, None, None, []
-        curr = curr_data[-1]  # nến hiện tại đang chạy theo current_interval
 
-        if compare_interval == current_interval:
-            prev = curr_data[-2]  # nến đóng gần nhất cùng khung
-        else:
-            cmp_data = binance_api_request(url, params={"symbol": symbol, "interval": compare_interval, "limit": 2})
-            if not cmp_data or len(cmp_data) < 2:
-                return None, None, None, []
-            prev = cmp_data[-2]  # nến đã đóng gần nhất theo khung so sánh
-
-        lookback = max(int(_STRATEGY_CONFIG.get('flat_zone_lookback', 5)) + 2, 7)
-        if len(curr_data) < lookback + 1:
-            hist_data = binance_api_request(url, params={"symbol": symbol, "interval": current_interval, "limit": lookback + 1})
-        else:
-            hist_data = curr_data
-        closed_history = list(hist_data[:-1])[-lookback:] if hist_data else []
+        curr = data[-1]       # nến hiện tại đang chạy
+        prev = data[-2]       # nến đã đóng gần nhất cùng khung
+        closed_history = list(data[:-1])[-lookback:]
         result = (curr, prev, None, closed_history)
         _cleanup_signal_data_cache()
         _SIGNAL_DATA_CACHE[key] = {'ts': now, 'data': result}
         return result
     except Exception as e:
-        logger.error(f"Lỗi REST lấy dữ liệu speed 2tf {symbol}: {e}")
+        logger.error(f"Lỗi REST lấy dữ liệu thân nến {symbol}: {e}")
         return None, None, None, []
 
 def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, recent_1m_history=None):
@@ -1012,7 +992,7 @@ def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, r
         low_curr = float(curr_candle[3]) if not isinstance(curr_candle, dict) else float(curr_candle['low'])
         close_curr = float(curr_candle[4]) if not isinstance(curr_candle, dict) else float(curr_candle['close'])
         volume_curr = float(curr_candle[5]) if not isinstance(curr_candle, dict) else float(curr_candle['volume'])
-        progress = _safe_progress(curr_candle, _interval_seconds(_STRATEGY_CONFIG.get('signal_interval', '1m')))
+        progress = _safe_progress(curr_candle, _interval_seconds(_STRATEGY_CONFIG.get('current_interval', _STRATEGY_CONFIG.get('signal_interval', '1m'))))
         signal, score, reason, _ = _score_signal_parts(
             open_curr, close_curr, high_curr, low_curr, volume_curr,
             prev_candle, prev15m_candle, progress=progress, mode='entry', recent_1m_history=recent_1m_history,
@@ -1585,7 +1565,7 @@ class BaseBot:
 
         tp_sl_info = f" | TP: {self.tp}%" if self.tp else " | TP: Tắt"
         tp_sl_info += f" | SL: {self.sl}%" if self.sl else " | SL: Tắt"
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: speed 2 khung nến | Đảo chiều khi tín hiệu ngược đủ chuẩn{tp_sl_info}")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: so sánh thân nến cùng khung | Đảo chiều khi tín hiệu ngược đủ chuẩn{tp_sl_info}")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1821,7 +1801,7 @@ class BaseBot:
             # Lấy nến đã đóng gần nhất của compare_interval qua REST/cache nhưng vẫn giữ candle realtime hiện tại nếu có.
             cfg = _STRATEGY_CONFIG.get_all()
             current_interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
-            compare_interval = _normalize_interval(cfg.get('compare_interval', current_interval))
+            compare_interval = current_interval
             if compare_interval != current_interval:
                 rest_curr_raw, rest_prev_raw, _, _ = _fetch_rest_1m15m_signal_data(symbol)
                 if rest_prev_raw:
@@ -1866,7 +1846,7 @@ class BaseBot:
             if not curr or not prev:
                 return None, None, None, []
             interval = _normalize_interval(_STRATEGY_CONFIG.get('current_interval', _STRATEGY_CONFIG.get('signal_interval', '1m')))
-            market_interval = _normalize_interval(_STRATEGY_CONFIG.get('compare_interval', interval))
+            market_interval = interval
             def conv(arr, is_final, used_interval):
                 return {
                     'symbol': symbol.upper(), 'interval': used_interval,
@@ -2455,7 +2435,7 @@ class BotManager:
 
         if api_key and api_secret:
             self._verify_api_connection()
-            self.log("🟢 HỆ THỐNG BOT SIMPLE SPEED 2 KHUNG NẾN - ĐẢO CHIỀU KHI TÍN HIỆU NGƯỢC")
+            self.log("🟢 HỆ THỐNG BOT THÂN NẾN CÙNG KHUNG - ĐẢO CHIỀU KHI TÍN HIỆU NGƯỢC")
             self._initialize_cache()
             self._cache_thread = threading.Thread(target=self._cache_updater, daemon=True, name='cache_updater')
             self._cache_thread.start()
@@ -2539,7 +2519,7 @@ class BotManager:
                     'sl': bot.sl,
                 })
 
-            summary = "📊 **THỐNG KÊ CHI TIẾT - BOT SIMPLE SPEED 2 KHUNG NẾN**\n\n"
+            summary = "📊 **THỐNG KÊ CHI TIẾT - BOT THÂN NẾN CÙNG KHUNG**\n\n"
 
             cache_stats = _COINS_CACHE.get_stats()
             coins_in_cache = cache_stats['count']
@@ -2661,7 +2641,7 @@ class BotManager:
         if created_count > 0:
             tp_info = f"🎯 TP: {tp}%" if tp else "🎯 TP: Tắt"
             sl_info = f"🛡️ SL: {sl}%" if sl else "🛡️ SL: Tắt"
-            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT SIMPLE SPEED 2 KHUNG NẾN</b>\n\n"
+            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT THÂN NẾN CÙNG KHUNG</b>\n\n"
                            f"🎯 Chiến lược: {strategy_type}\n💰 Đòn bẩy: {lev}x\n"
                            f"📈 % Số dư: {percent}%\n{tp_info}\n{sl_info}\n"
                            f"🔧 Chế độ: {bot_mode}\n🔢 Số bot: {created_count}\n")
@@ -2787,21 +2767,34 @@ class BotManager:
         current_step = user_state.get('step')
 
         strategy_key_map = {
-            '✏️ Current timeframe': ('current_interval', 'Khung nến hiện tại để đo tốc độ realtime. Ví dụ: 1m, 3m, 5m, 15m.'),
-            '✏️ Compare timeframe': ('compare_interval', 'Khung nến đã đóng gần nhất để so sánh tốc độ. Ví dụ: 1m, 15m, 1h.'),
-            '✏️ Signal timeframe': ('current_interval', 'Tên cũ: khung nến hiện tại để đo tốc độ realtime.'),
-            '✏️ Min elapsed seconds': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét. Ví dụ 6, 10, 15.'),
-            '✏️ Speed up factor': ('speed_up_factor', 'Current speed phải lớn hơn previous speed bao nhiêu lần để có tín hiệu theo hướng nến hiện tại. Ví dụ 1.0, 1.2, 1.62.'),
-            '✏️ Min body ratio': ('body_ratio_min', 'Thân nến/range tối thiểu để tránh doji. Ví dụ 0.25.'),
-            '✏️ Min range pct': ('min_range_pct', 'Range tối thiểu của nến theo % giá để tránh nến quá thấp. Ví dụ 0.08.'),
-            '✏️ Min body pct': ('min_body_pct', 'Thân nến tối thiểu theo % giá. Ví dụ 0.03.'),
-            '✏️ Flat zone lookback': ('flat_zone_lookback', 'Số nến đóng gần nhất để kiểm tra vùng bẹt. 0 hoặc 1 = tắt. Ví dụ 5.'),
-            '✏️ Min box range pct': ('min_box_range_pct', 'Range tối thiểu của cụm nến theo % giá để tránh vùng bẹt. Ví dụ 0.15.'),
-            '✏️ Low volume filter': ('low_volume_filter_enabled', '1 = bật lọc coin volume 24h thấp; 0 = tắt'),
-            '✏️ Min 24h volume': ('min_24h_volume', 'Volume 24h tối thiểu của coin để bot động chọn. Ví dụ 10000000, 50000000'),
-            '✏️ Profit protect ON/OFF': ('profit_protect_enabled', '1 = bật hút lực từ đỉnh, 0 = tắt.'),
-            '✏️ Profit start ROI': ('profit_protect_start_roi', 'ROI tối thiểu để bắt đầu bảo vệ lợi nhuận. Ví dụ 10, 20, 30.'),
-            '✏️ Profit pullback ROI': ('profit_protect_pullback_roi', 'Khi ROI tụt khỏi đỉnh bao nhiêu % thì đóng. Ví dụ 5, 8, 10.'),
+            '✏️ Khung nến tín hiệu': ('current_interval', 'Khung nến dùng cho cả nến hiện tại và nến đã đóng gần nhất. Ví dụ: 1m, 3m, 5m, 15m, 1h.'),
+            '✏️ Thời gian tối thiểu': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét tín hiệu. Ví dụ 6, 10, 15, 300.'),
+            '✏️ Hệ số thân nến': ('speed_up_factor', 'Thân nến hiện tại phải lớn hơn thân nến đã đóng gần nhất bao nhiêu lần. Ví dụ 1.0, 1.2, 1.5.'),
+            '✏️ Tỷ lệ thân nến tối thiểu': ('body_ratio_min', 'Tỷ lệ thân nến/range tối thiểu để tránh doji. Ví dụ 0.25.'),
+            '✏️ Biên độ nến tối thiểu': ('min_range_pct', 'Chiều cao nến tối thiểu theo % giá để tránh nến quá thấp. Ví dụ 0.08, 0.1.'),
+            '✏️ Thân nến tối thiểu': ('min_body_pct', 'Thân nến tối thiểu theo % giá. Ví dụ 0.03.'),
+            '✏️ Số nến vùng bẹt': ('flat_zone_lookback', 'Số nến đóng gần nhất để kiểm tra vùng bẹt. 0 hoặc 1 = tắt. Ví dụ 5.'),
+            '✏️ Biên độ vùng bẹt tối thiểu': ('min_box_range_pct', 'Biên độ tối thiểu của cụm nến theo % giá để tránh vùng bẹt. Ví dụ 0.15.'),
+            '✏️ Lọc coin volume thấp': ('low_volume_filter_enabled', '1 = bật lọc coin volume 24h thấp; 0 = tắt.'),
+            '✏️ Volume 24h tối thiểu': ('min_24h_volume', 'Volume 24h tối thiểu của coin để bot động chọn. Ví dụ 10000000, 50000000.'),
+            '✏️ Bảo vệ lợi nhuận': ('profit_protect_enabled', '1 = bật hút lực từ đỉnh, 0 = tắt.'),
+            '✏️ ROI bắt đầu bảo vệ': ('profit_protect_start_roi', 'ROI tối thiểu để bắt đầu bảo vệ lợi nhuận. Ví dụ 10, 20, 30.'),
+            '✏️ ROI tụt từ đỉnh để đóng': ('profit_protect_pullback_roi', 'Khi ROI tụt khỏi đỉnh bao nhiêu % thì đóng. Ví dụ 5, 8, 10.'),
+            # Các tên cũ vẫn nhận để tránh lỗi nếu Telegram còn lưu bàn phím cũ.
+            '✏️ Current timeframe': ('current_interval', 'Tên cũ: khung nến tín hiệu.'),
+            '✏️ Signal timeframe': ('current_interval', 'Tên cũ: khung nến tín hiệu.'),
+            '✏️ Min elapsed seconds': ('min_elapsed_seconds', 'Tên cũ: thời gian tối thiểu.'),
+            '✏️ Speed up factor': ('speed_up_factor', 'Tên cũ: hệ số thân nến.'),
+            '✏️ Min body ratio': ('body_ratio_min', 'Tên cũ: tỷ lệ thân nến tối thiểu.'),
+            '✏️ Min range pct': ('min_range_pct', 'Tên cũ: biên độ nến tối thiểu.'),
+            '✏️ Min body pct': ('min_body_pct', 'Tên cũ: thân nến tối thiểu.'),
+            '✏️ Flat zone lookback': ('flat_zone_lookback', 'Tên cũ: số nến vùng bẹt.'),
+            '✏️ Min box range pct': ('min_box_range_pct', 'Tên cũ: biên độ vùng bẹt tối thiểu.'),
+            '✏️ Low volume filter': ('low_volume_filter_enabled', 'Tên cũ: lọc coin volume thấp.'),
+            '✏️ Min 24h volume': ('min_24h_volume', 'Tên cũ: volume 24h tối thiểu.'),
+            '✏️ Profit protect ON/OFF': ('profit_protect_enabled', 'Tên cũ: bảo vệ lợi nhuận.'),
+            '✏️ Profit start ROI': ('profit_protect_start_roi', 'Tên cũ: ROI bắt đầu bảo vệ.'),
+            '✏️ Profit pullback ROI': ('profit_protect_pullback_roi', 'Tên cũ: ROI tụt từ đỉnh để đóng.'),
         }
 
         if text == "📊 Danh sách Bot":
@@ -3101,8 +3094,8 @@ class BotManager:
 
             if success:
                 success_msg = (
-                    f"✅ <b>ĐÃ TẠO BOT MARKET REGIME + SPEED THÀNH CÔNG</b>\n\n"
-                    f"🤖 Chiến lược: speed pattern 5+1 + profit protect\n"
+                    f"✅ <b>ĐÃ TẠO BOT THÂN NẾN CÙNG KHUNG THÀNH CÔNG</b>\n\n"
+                    f"🤖 Chiến lược: thân nến hiện tại lớn hơn thân nến đã đóng + bảo vệ lợi nhuận\n"
                     f"🔧 Chế độ: {bot_mode}\n"
                     f"🔢 Số bot: {bot_count}\n"
                     f"💰 Đòn bẩy: {leverage}x\n"
