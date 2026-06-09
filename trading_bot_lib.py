@@ -230,11 +230,9 @@ def create_strategy_config_keyboard():
     return {
         "keyboard": [
             [{"text": "📊 Xem tham số chiến lược"}],
-            [{"text": "✏️ Khung nến hiện tại"}, {"text": "✏️ Khung nến so sánh"}],
-            [{"text": "✏️ Thời gian tối thiểu"}, {"text": "✏️ Hệ số độ dài body"}],
-            [{"text": "✏️ Tỷ lệ thân nến tối thiểu"}, {"text": "✏️ Biên độ nến tối thiểu"}],
-            [{"text": "✏️ Thân nến tối thiểu"}, {"text": "✏️ Số nến vùng bẹt"}],
-            [{"text": "✏️ Biên độ vùng bẹt tối thiểu"}],
+            [{"text": "✏️ Khung nến tín hiệu"}],
+            [{"text": "✏️ TP chiến lược"}, {"text": "✏️ SL chiến lược"}],
+            [{"text": "✏️ Cắt lỗ khẩn cấp"}],
             [{"text": "✏️ Lọc coin volume thấp"}, {"text": "✏️ Volume 24h tối thiểu"}],
             [{"text": "✏️ Bảo vệ lợi nhuận"}, {"text": "✏️ ROI bắt đầu bảo vệ"}],
             [{"text": "✏️ ROI tụt từ đỉnh để đóng"}],
@@ -657,14 +655,18 @@ def _interval_seconds(interval=None):
     return float(_BINANCE_INTERVAL_SECONDS.get(_normalize_interval(interval), 60.0))
 
 class StrategyConfig:
-    """Cấu hình chiến lược ĐỘ DÀI BODY ĐA KHUNG: chỉ dùng volume/thời gian, vẫn lọc nến bẹt/doji."""
+    """Cấu hình chiến lược NẾN TRƯỚC ĐÓNG HƯỚNG NÀO THÌ VÀO NGƯỢC HƯỚNG ĐÓ."""
     DEFAULTS = {
         'current_interval': '1m',
-        'compare_interval': '1m',
+        'compare_interval': '1m',   # giữ key cũ để tương thích, logic mới không dùng
         'timeframe_seconds': 60.0,
-        'min_elapsed_seconds': 6.0,
+        'min_elapsed_seconds': 0.0,  # giữ key cũ để tương thích, logic mới không dùng,
         'volume_reach_factor': 0.0,    # giữ key cũ để tương thích, KHÔNG dùng trong logic body
         'speed_up_factor': 1.00,       # current_body_pct > previous_body_pct * factor => tín hiệu theo hướng nến hiện tại
+        'exit_body_factor': 0.70,       # khi đang có vị thế: body ngược chiều chỉ cần >= 0.70x body nến so sánh để đóng/đảo
+        'emergency_stop_roi': 120.0,    # cắt lỗ khẩn cấp theo ROI đã nhân đòn bẩy, 0 = tắt
+        'strategy_tp_roi': 100.0,       # TP chung có thể chỉnh trong chiến lược, 0 = tắt
+        'strategy_sl_roi': 0.0,         # SL chung có thể chỉnh trong chiến lược, 0 = tắt
         'speed_down_factor': 1.00,     # giữ key cũ để tương thích, KHÔNG dùng trong logic body
         'body_ratio_min': 0.25,
         'min_range_pct': 0.08,
@@ -723,30 +725,28 @@ _STRATEGY_CONFIG = StrategyConfig()
 
 def get_strategy_config_text():
     c = _STRATEGY_CONFIG.get_all()
-    current_interval = _normalize_interval(c.get('current_interval', '1m'))
-    compare_interval = _normalize_interval(c.get('compare_interval', current_interval))
+    interval = _normalize_interval(c.get('current_interval', c.get('signal_interval', '1m')))
+    tp = float(c.get('strategy_tp_roi', 100.0) or 0.0)
+    sl = float(c.get('strategy_sl_roi', 0.0) or 0.0)
     return (
-        "🎯 <b>THAM SỐ CHIẾN LƯỢC ĐỘ DÀI BODY ĐA KHUNG</b>\n\n"
-        f"• Khung nến hiện tại: {current_interval} ({_interval_seconds(current_interval):.0f}s)\n"
-        f"• Khung nến so sánh đã đóng: {compare_interval} ({_interval_seconds(compare_interval):.0f}s)\n"
-        f"• Thời gian tối thiểu để xét nến hiện tại: {c.get('min_elapsed_seconds', 6.0):.1f}s\n"
-        f"• Hệ số độ dài body: {c.get('speed_up_factor', 1.0):.2f}x body nến so sánh\n"
-        f"• Tỷ lệ thân nến tối thiểu: {c.get('body_ratio_min', 0.25):.2f}\n"
-        f"• Biên độ nến tối thiểu: {c.get('min_range_pct', 0.08):.3f}%\n"
-        f"• Thân nến tối thiểu: {c.get('min_body_pct', 0.03):.3f}%\n"
-        f"• Vùng bẹt: {int(c.get('flat_zone_lookback', 5))} nến | biên độ tối thiểu {c.get('min_box_range_pct', 0.15):.3f}%\n"
+        "🎯 <b>THAM SỐ CHIẾN LƯỢC NẾN TRƯỚC → VÀO NGƯỢC</b>\n\n"
+        f"• Khung nến tín hiệu: {interval} ({_interval_seconds(interval):.0f}s)\n"
+        f"• TP chiến lược: {tp:.1f}% ROI ({'TẮT' if tp <= 0 else 'BẬT'})\n"
+        f"• SL chiến lược: {sl:.1f}% ROI ({'TẮT' if sl <= 0 else 'BẬT'})\n"
+        f"• Cắt lỗ khẩn cấp: {c.get('emergency_stop_roi', 120.0):.1f}% ROI (0 = tắt)\n"
         f"• Lọc coin volume thấp: {'BẬT' if c.get('low_volume_filter_enabled', 1.0) >= 0.5 else 'TẮT'} | volume 24h tối thiểu: {c.get('min_24h_volume', 0):,.0f}\n"
         f"• Bảo vệ lợi nhuận: {'BẬT' if float(c.get('profit_protect_enabled', 1.0)) >= 0.5 else 'TẮT'} | bắt đầu {c.get('profit_protect_start_roi', 10.0):.1f}% ROI | tụt {c.get('profit_protect_pullback_roi', 8.0):.1f}% ROI thì đóng\n"
         "• Đồng bộ vị thế thật Binance: BẬT | khi có vị thế sẽ kiểm tra khoảng 1 giây/lần trước TP/SL/đảo chiều\n\n"
         "💰 <b>QUẢN LÝ VỐN</b>\n"
         "• Mỗi lệnh, kể cả đảo chiều: tính theo % số dư margin hiện tại.\n"
-        "• TP/SL tính theo ROI đã nhân đòn bẩy.\n\n"
-        "Luồng tín hiệu:\n"
-        "1) Lấy nến hiện tại theo khung hiện tại và nến đã đóng gần nhất theo khung so sánh.\n"
-        "2) Body = |close - open| / open * 100 để so theo phần trăm giá, tránh lệch giữa coin giá cao/thấp.\n"
-        "3) Nếu body nến hiện tại > body nến so sánh * hệ số body thì có tín hiệu.\n"
-        "4) Tín hiệu luôn theo hướng nến hiện tại: xanh → BUY, đỏ → SELL.\n"
-        "5) Vẫn giữ lọc doji/thân nến/biên độ nến/vùng bẹt/coin volume thấp. Khi đóng để đảo chiều thì đóng và đảo luôn, không kiểm tra tín hiệu lần hai."
+        "• TP/SL tính theo ROI đã nhân đòn bẩy.\n"
+        "• TP/SL trong mục chiến lược có thể chỉnh sau khi bot đã vào lệnh và sẽ áp dụng cho lệnh đang giữ.\n\n"
+        "Luồng tín hiệu mới:\n"
+        "1) Chỉ lấy nến đã đóng gần nhất của khung nến tín hiệu.\n"
+        "2) Nếu nến đã đóng là xanh → tín hiệu SELL.\n"
+        "3) Nếu nến đã đóng là đỏ → tín hiệu BUY.\n"
+        "4) Bỏ qua điều kiện doji/thân nến/biên độ/vùng bẹt khi tạo tín hiệu. Chỉ cần nến đã đóng có hướng rõ BUY hoặc SELL.\n"
+        "5) Khi tín hiệu ngược với vị thế thật trên Binance, bot đóng và đảo luôn."
     )
 
 def _candle_direction(open_price, close_price):
@@ -882,74 +882,34 @@ def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_cu
                         prev_candle, market_candle=None, progress=1.0,
                         mode='entry', recent_1m_history=None, market_history=None, current_is_final=False):
     """
-    Chiến lược BODY LENGTH ĐA KHUNG:
-    - Không dùng volume để tạo tín hiệu.
-    - So sánh độ dài thân nến hiện tại với thân nến đã đóng gần nhất của khung so sánh.
-    - Body dùng theo % giá: abs(close-open) / open * 100.
-    - Nếu current_body_pct > previous_body_pct * body_factor => vào theo hướng nến hiện tại.
-    - Vẫn giữ bộ lọc nến: doji/body/range; entry lọc thêm vùng bẹt.
-    - TP/SL, profit protect, đồng bộ vị thế thật Binance vẫn giữ như bản trước.
+    Chiến lược NẾN ĐÃ ĐÓNG GẦN NHẤT → VÀO NGƯỢC:
+    - Chọn một khung nến tín hiệu: 1m, 3m, 5m, 15m, 1h...
+    - Lấy nến đã đóng gần nhất của chính khung đó.
+    - Nến đóng xanh => tín hiệu SELL.
+    - Nến đóng đỏ => tín hiệu BUY.
+    - Bỏ qua toàn bộ điều kiện doji/thân nến/biên độ/vùng bẹt khi tạo tín hiệu.
     """
     try:
         cfg = _STRATEGY_CONFIG.get_all()
-        current_interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
-        compare_interval = _normalize_interval(cfg.get('compare_interval', current_interval))
-        current_tf = _interval_seconds(current_interval)
-        progress = max(float(progress), 0.001)
-        elapsed = progress * current_tf
-        min_elapsed = float(cfg.get('min_elapsed_seconds', 6.0))
-        if elapsed < min_elapsed:
-            return None, 0, f'elapsed_too_early_{elapsed:.1f}s need={min_elapsed:.1f}s', False
-
+        interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
         if not prev_candle:
-            return None, 0, 'missing_compare_closed_candle', False
+            return None, 0, 'missing_closed_candle', False
 
-        prev_open = _candle_get(prev_candle, 'open', 1)
-        prev_close = _candle_get(prev_candle, 'close', 4)
-        prev_high = _candle_get(prev_candle, 'high', 2)
-        prev_low = _candle_get(prev_candle, 'low', 3)
+        prev_open = float(_candle_get(prev_candle, 'open', 1))
+        prev_close = float(_candle_get(prev_candle, 'close', 4))
+        prev_side = _candle_direction(prev_open, prev_close)
+        if not prev_side:
+            return None, 0, f'closed_candle_flat_no_direction interval={interval}', False
 
-        current_side = _candle_direction(float(open_curr), float(current_price))
-        if not current_side:
-            return None, 0, 'current_flat_no_direction', False
-
-        current_ok, current_info = _is_tradeable_candle(open_curr, current_price, high_curr, low_curr)
-        if not current_ok:
-            return None, 0, f'current_candle_not_tradeable {current_info}', False
-
-        # Nến so sánh phải đủ chuẩn vì chính body của nó là mốc so sánh.
-        prev_ok, prev_info = _is_tradeable_candle(prev_open, prev_close, prev_high, prev_low)
-        if not prev_ok:
-            return None, 0, f'previous_candle_not_tradeable {prev_info}', False
-
-        # Entry lọc thêm vùng bẹt. Exit/đảo chiều không dùng flat zone để tránh cản đóng lệnh.
-        if mode == 'entry':
-            flat_zone, flat_info = _is_flat_zone(recent_1m_history or [], current_price=current_price)
-            if flat_zone:
-                return None, 0, f'flat_zone_block {flat_info}', False
-
-        current_body_pct = abs(float(current_price) - float(open_curr)) / max(abs(float(open_curr)), 1e-12) * 100.0
-        previous_body_pct = abs(float(prev_close) - float(prev_open)) / max(abs(float(prev_open)), 1e-12) * 100.0
-        body_factor = float(cfg.get('speed_up_factor', 1.00))
-        is_body_stronger = current_body_pct > previous_body_pct * body_factor
-
-        if not is_body_stronger:
-            return None, 0, (
-                f'body_not_big_enough current_side={current_side} '
-                f'current_body_pct={current_body_pct:.6f}% prev_body_pct={previous_body_pct:.6f}% '
-                f'body_factor={body_factor:.3f}'
-            ), False
-
-        signal = current_side
+        signal = 'SELL' if prev_side == 'BUY' else 'BUY'
         reason = (
-            f'body_length_follow_ok | current_tf={current_interval} compare_tf={compare_interval} '
-            f'elapsed={elapsed:.1f}s progress={progress:.3f} '
-            f'current_body_pct={current_body_pct:.6f}% prev_body_pct={previous_body_pct:.6f}% '
-            f'body_factor={body_factor:.3f} signal={signal}'
+            f'prev_closed_reverse_ok | interval={interval} '
+            f'prev_open={prev_open:.12g} prev_close={prev_close:.12g} '
+            f'prev_side={prev_side} signal={signal} mode={mode}'
         )
         return signal, 1, reason, False
     except Exception as e:
-        logger.error(f"Lỗi chấm điểm tín hiệu body length: {e}")
+        logger.error(f"Lỗi chấm điểm tín hiệu nến trước vào ngược: {e}")
         return None, 0, 'error', False
 
 def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
@@ -962,44 +922,30 @@ def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
     }
 
 def _fetch_rest_1m15m_signal_data(symbol):
-    """Tên cũ giữ để tương thích: lấy nến hiện tại theo current_interval và nến đã đóng theo compare_interval."""
+    """Tên cũ giữ để tương thích: logic mới lấy nến hiện tại và nến đã đóng gần nhất cùng khung tín hiệu."""
     try:
         cfg = _STRATEGY_CONFIG.get_all()
-        current_interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
-        compare_interval = _normalize_interval(cfg.get('compare_interval', current_interval))
+        interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
         symbol = symbol.upper()
         now = time.time()
-        key = (symbol, current_interval, compare_interval)
+        key = (symbol, interval, 'prev_reverse')
         cached = _SIGNAL_DATA_CACHE.get(key)
         if cached and now - cached.get('ts', 0) < _SIGNAL_DATA_CACHE_TTL:
             return cached['data']
 
         url = "https://fapi.binance.com/fapi/v1/klines"
-        curr_data = binance_api_request(url, params={"symbol": symbol, "interval": current_interval, "limit": 2})
-        if not curr_data or len(curr_data) < 2:
+        data = binance_api_request(url, params={"symbol": symbol, "interval": interval, "limit": 7})
+        if not data or len(data) < 2:
             return None, None, None, []
-        curr = curr_data[-1]  # nến hiện tại đang chạy theo current_interval
-
-        if compare_interval == current_interval:
-            prev = curr_data[-2]  # nến đóng gần nhất cùng khung
-        else:
-            cmp_data = binance_api_request(url, params={"symbol": symbol, "interval": compare_interval, "limit": 2})
-            if not cmp_data or len(cmp_data) < 2:
-                return None, None, None, []
-            prev = cmp_data[-2]  # nến đã đóng gần nhất theo khung so sánh
-
-        lookback = max(int(_STRATEGY_CONFIG.get('flat_zone_lookback', 5)) + 2, 7)
-        if len(curr_data) < lookback + 1:
-            hist_data = binance_api_request(url, params={"symbol": symbol, "interval": current_interval, "limit": lookback + 1})
-        else:
-            hist_data = curr_data
-        closed_history = list(hist_data[:-1])[-lookback:] if hist_data else []
+        curr = data[-1]
+        prev = data[-2]
+        closed_history = list(data[:-1])
         result = (curr, prev, None, closed_history)
         _cleanup_signal_data_cache()
         _SIGNAL_DATA_CACHE[key] = {'ts': now, 'data': result}
         return result
     except Exception as e:
-        logger.error(f"Lỗi REST lấy dữ liệu body length {symbol}: {e}")
+        logger.error(f"Lỗi REST lấy dữ liệu nến trước vào ngược {symbol}: {e}")
         return None, None, None, []
 
 def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, recent_1m_history=None):
@@ -1017,18 +963,18 @@ def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, r
         )
         return signal
     except Exception as e:
-        logger.error(f"Lỗi tính tín hiệu từ nến body length: {e}")
+        logger.error(f"Lỗi tính tín hiệu từ nến nến trước vào ngược: {e}")
         return None
 
 def get_candle_signal_1h(symbol):
-    """Tên cũ để tương thích: thực tế dùng body-length theo khung nến đã chọn."""
+    """Tên cũ để tương thích: thực tế dùng nến-trước-vào-ngược theo khung nến đã chọn."""
     try:
         curr, prev1, prev15, history = _fetch_rest_1m15m_signal_data(symbol)
         if not curr or not prev1:
             return None
         return compute_signal_from_candles(prev1, curr, prev15, history)
     except Exception as e:
-        logger.error(f"Lỗi phân tích tín hiệu body length {symbol}: {e}")
+        logger.error(f"Lỗi phân tích tín hiệu nến trước vào ngược {symbol}: {e}")
         return None
 
 def get_positions(symbol=None, api_key=None, api_secret=None):
@@ -1451,7 +1397,7 @@ class RealtimeKlineManager:
                 self.candle_data[symbol] = self._to_candle_dict(data[-1], symbol, is_final=False, interval=interval)
                 self.prev_candle_data[symbol] = self._to_candle_dict(data[-2], symbol, is_final=True, interval=interval)
         except Exception as e:
-            logger.error(f"Lỗi nạp nến ban đầu body-length {symbol}: {e}")
+            logger.error(f"Lỗi nạp nến ban đầu nến-trước-vào-ngược {symbol}: {e}")
 
     def _connect(self, symbol):
         interval = self._current_interval()
@@ -1629,9 +1575,11 @@ class BaseBot:
         self.thread = threading.Thread(target=self._run, daemon=True, name=f"bot-{self.bot_id[-8:]}")
         self.thread.start()
 
-        tp_sl_info = f" | TP: {self.tp}%" if self.tp else " | TP: Tắt"
-        tp_sl_info += f" | SL: {self.sl}%" if self.sl else " | SL: Tắt"
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: body length đa khung | Đảo chiều khi tín hiệu ngược đủ chuẩn{tp_sl_info}")
+        strategy_tp = float(_STRATEGY_CONFIG.get('strategy_tp_roi', 0.0) or 0.0)
+        strategy_sl = float(_STRATEGY_CONFIG.get('strategy_sl_roi', 0.0) or 0.0)
+        tp_sl_info = f" | TP chiến lược: {strategy_tp}%" if strategy_tp > 0 else (f" | TP bot: {self.tp}%" if self.tp else " | TP: Tắt")
+        tp_sl_info += f" | SL chiến lược: {strategy_sl}%" if strategy_sl > 0 else (f" | SL bot: {self.sl}%" if self.sl else " | SL: Tắt")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: nến trước vào ngược | Đảo chiều khi tín hiệu ngược đủ chuẩn{tp_sl_info}")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1812,7 +1760,7 @@ class BaseBot:
         self.symbol_data[symbol]['realtime_signal'] = signal
 
     def _compute_signal_from_candle(self, current_candle, prev_candle, prev15_candle=None, mode='entry', return_details=False, recent_1m_history=None):
-        """Tính tín hiệu body length theo khung nến đã chọn."""
+        """Tính tín hiệu nến trước vào ngược theo khung nến đã chọn."""
         try:
             open_curr = float(current_candle['open'])
             current_price = float(current_candle.get('close', 0))
@@ -1838,7 +1786,7 @@ class BaseBot:
             details = {'signal': signal, 'score': score, 'reason': reason, 'is_spike': is_spike, 'progress': progress}
             return details if return_details else signal
         except Exception as e:
-            logger.error(f"Lỗi compute signal body length: {e}")
+            logger.error(f"Lỗi compute signal nến trước vào ngược: {e}")
             details = {'signal': None, 'score': 0, 'reason': 'error', 'is_spike': False}
             return details if return_details else None
 
@@ -1930,7 +1878,7 @@ class BaseBot:
                 market_candle['history'] = market_history
             return conv(curr, False, interval), conv(prev, True, interval), market_candle, market_history
         except Exception as e:
-            logger.error(f"Lỗi REST fallback lấy nến body-length {symbol}: {e}")
+            logger.error(f"Lỗi REST fallback lấy nến nến-trước-vào-ngược {symbol}: {e}")
             return None, None, None, []
 
     def _debug_realtime_signal(self, symbol, current_side=None):
@@ -1979,10 +1927,13 @@ class BaseBot:
         # Không spam log debug; chỉ log khi thật sự đóng/đảo.
 
         if signal is None or signal == current_side:
+            # Không đóng nếu chưa có tín hiệu ngược, nhưng lưu lý do để phần thống kê/debug nhìn được bot đang bị cản bởi gì.
+            if symbol in self.symbol_data:
+                self.symbol_data[symbol]['last_exit_check_reason'] = details.get('reason')
             return
 
         self.log(
-            f"🕯️ {symbol} - Tín hiệu realtime ngược đủ chuẩn ({signal} vs {current_side}) | "
+            f"🕯️ {symbol} - Tín hiệu body ngược đủ chuẩn ({signal} vs {current_side}) | "
             f"score={details.get('score')} | {details.get('reason')} | đóng lệnh và đảo chiều ngay"
         )
         self._close_symbol_position(symbol, reason="Candle opposite (same realtime signal)", reverse_side=signal)
@@ -2083,13 +2034,25 @@ class BaseBot:
         _, pnl_now = self._calc_roi_pnl_for_symbol(symbol, price=current_price)
         pnl_txt = f" | PnL tạm tính {pnl_now:.4f} USDT" if pnl_now is not None else ""
 
-        if self.tp and roi >= self.tp:
-            self.log(f"🎯 {symbol} - Đạt TP {self.tp}% | ROI hiện tại {roi:.2f}%{pnl_txt}, đóng lệnh")
-            self._close_symbol_position(symbol, reason=f"TP {self.tp}%")
+        emergency_stop = float(_STRATEGY_CONFIG.get('emergency_stop_roi', 120.0) or 0.0)
+        if emergency_stop > 0 and roi <= -emergency_stop:
+            self.log(f"🚨 {symbol} - Cắt lỗ khẩn cấp {emergency_stop:.1f}% | ROI hiện tại {roi:.2f}%{pnl_txt}, đóng lệnh ngay")
+            self._close_symbol_position(symbol, reason=f"Emergency SL {emergency_stop:.1f}%")
             return
-        if self.sl and roi <= -self.sl:
-            self.log(f"🛡️ {symbol} - Đạt SL {self.sl}% | ROI hiện tại {roi:.2f}%{pnl_txt}, đóng lệnh")
-            self._close_symbol_position(symbol, reason=f"SL {self.sl}%")
+
+        # TP/SL trong Chiến lược được đọc realtime để có thể chỉnh sau khi bot đã vào lệnh.
+        strategy_tp = float(_STRATEGY_CONFIG.get('strategy_tp_roi', 0.0) or 0.0)
+        strategy_sl = float(_STRATEGY_CONFIG.get('strategy_sl_roi', 0.0) or 0.0)
+        effective_tp = strategy_tp if strategy_tp > 0 else (self.tp or 0)
+        effective_sl = strategy_sl if strategy_sl > 0 else (self.sl or 0)
+
+        if effective_tp and roi >= effective_tp:
+            self.log(f"🎯 {symbol} - Đạt TP {effective_tp}% | ROI hiện tại {roi:.2f}%{pnl_txt}, đóng lệnh")
+            self._close_symbol_position(symbol, reason=f"TP {effective_tp}%")
+            return
+        if effective_sl and roi <= -abs(effective_sl):
+            self.log(f"🛡️ {symbol} - Đạt SL {effective_sl}% | ROI hiện tại {roi:.2f}%{pnl_txt}, đóng lệnh")
+            self._close_symbol_position(symbol, reason=f"SL {effective_sl}%")
             return
 
     def _close_symbol_position(self, symbol, reason="", reverse_side=None):
@@ -2722,8 +2685,10 @@ class BotManager:
                 summary += "📋 **CHI TIẾT BOT**:\n"
                 for bot in bot_details:
                     status_emoji = "🟢" if bot['is_trading'] else "🟡" if bot['has_coin'] else "🔴"
-                    tp_sl_str = f"TP:{bot['tp']}%" if bot['tp'] else "TP:Tắt"
-                    tp_sl_str += f" SL:{bot['sl']}%" if bot['sl'] else " SL:Tắt"
+                    stp = float(_STRATEGY_CONFIG.get('strategy_tp_roi', 0.0) or 0.0)
+                    sslv = float(_STRATEGY_CONFIG.get('strategy_sl_roi', 0.0) or 0.0)
+                    tp_sl_str = f"TP chiến lược:{stp}%" if stp > 0 else (f"TP bot:{bot['tp']}%" if bot['tp'] else "TP:Tắt")
+                    tp_sl_str += f" SL chiến lược:{sslv}%" if sslv > 0 else (f" SL bot:{bot['sl']}%" if bot['sl'] else " SL:Tắt")
                     summary += f"{status_emoji} **bot_{bot['index']}** {tp_sl_str}\n"
                     summary += f"   💰 Đòn bẩy: {bot['leverage']}x | Vốn: {bot['percent']}%\n"
                     try:
@@ -2783,14 +2748,15 @@ class BotManager:
 
     def send_main_menu(self, chat_id):
         welcome = (
-            "🤖 <b>BOT GIAO DỊCH FUTURES - TÍN HIỆU 2 NẾN 1h REAL-TIME (VOLUME + BODY)</b>\n\n"
+            "🤖 <b>BOT GIAO DỊCH FUTURES - NẾN TRƯỚC VÀO NGƯỢC</b>\n\n"
             "🎯 <b>CƠ CHẾ HOẠT ĐỘNG:</b>\n"
-            "• Tín hiệu được tính liên tục dựa trên nến 1h đang hình thành (thân nến = giá hiện tại - giá mở, volume lũy kế).\n"
-            "• Khi tín hiệu ngược hướng với vị thế → đóng lệnh và ĐẢO CHIỀU ngay trên cùng coin.\n"
-            "• Nếu đặt cả TP và SL, khi chạm TP hoặc SL sẽ đóng và chuyển sang coin khác.\n"
-            "• Không sử dụng cân bằng/lọc coin, không nhồi lệnh.\n"
-            "• Vào lệnh bằng điểm lực nến realtime; đóng/đảo chiều chỉ khi tín hiệu ngược đủ mạnh và duy trì đủ thời gian.\n\n"
-            "📌 <b>LƯU Ý:</b> Có thể chỉnh tham số chiến lược từ nút 🎯 Chiến lược."
+            "• Chọn khung nến tín hiệu trong mục 🎯 Chiến lược.\n"
+            "• Nến đã đóng gần nhất xanh → bot vào/đảo SELL.\n"
+            "• Nến đã đóng gần nhất đỏ → bot vào/đảo BUY.\n"
+            "• Bỏ qua doji/thân nến/biên độ/vùng bẹt khi tạo tín hiệu.\n"
+            "• TP/SL trong mục Chiến lược có thể chỉnh sau khi bot đã vào lệnh.\n"
+            "• Khi có vị thế, bot đồng bộ vị thế thật Binance trước TP/SL/đảo chiều.\n\n"
+            "📌 <b>LƯU Ý:</b> Có thể chỉnh tham số từ nút 🎯 Chiến lược."
         )
         send_telegram(welcome, chat_id=chat_id, reply_markup=create_main_menu(),
                      bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -2960,11 +2926,16 @@ class BotManager:
         current_step = user_state.get('step')
 
         strategy_key_map = {
-            '✏️ Khung nến hiện tại': ('current_interval', 'Khung nến hiện tại để đo body realtime. Ví dụ: 1m, 3m, 5m, 15m.'),
-            '✏️ Khung nến so sánh': ('compare_interval', 'Khung nến đã đóng gần nhất để so sánh body. Ví dụ: 1m, 15m, 1h.'),
+            '✏️ Khung nến tín hiệu': ('current_interval', 'Khung nến dùng để lấy nến đã đóng gần nhất. Ví dụ: 1m, 3m, 5m, 15m, 1h.'),
+            '✏️ Khung nến hiện tại': ('current_interval', 'Tên cũ: khung nến tín hiệu. Ví dụ: 1m, 3m, 5m, 15m.'),
+            '✏️ Khung nến so sánh': ('compare_interval', 'Tên cũ, logic mới không dùng. Nên chỉnh Khung nến tín hiệu.'),
             '✏️ Signal timeframe': ('current_interval', 'Tên cũ: khung nến hiện tại để đo body realtime.'),
             '✏️ Thời gian tối thiểu': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét. Ví dụ 6, 10, 15.'),
-            '✏️ Hệ số độ dài body': ('speed_up_factor', 'Body hiện tại phải lớn hơn body nến so sánh bao nhiêu lần để có tín hiệu theo hướng nến hiện tại. Ví dụ 1.0, 1.2, 1.62.'),
+            '✏️ Hệ số độ dài body': ('speed_up_factor', 'Khi vào lệnh: body hiện tại phải lớn hơn body nến so sánh bao nhiêu lần. Ví dụ 1.0, 1.2, 1.62.'),
+            '✏️ Hệ số body thoát': ('exit_body_factor', 'Khi đang có lệnh: body ngược chiều chỉ cần lớn hơn body nến so sánh bao nhiêu lần để đóng/đảo. Ví dụ 0.5, 0.7, 1.0.'),
+            '✏️ TP chiến lược': ('strategy_tp_roi', 'TP theo ROI đã nhân đòn bẩy. Có thể chỉnh sau khi bot đã vào lệnh. Nhập 0 để tắt. Ví dụ 50, 100, 150.'),
+            '✏️ SL chiến lược': ('strategy_sl_roi', 'SL theo ROI đã nhân đòn bẩy. Có thể chỉnh sau khi bot đã vào lệnh. Nhập 0 để tắt. Ví dụ 50, 100, 150.'),
+            '✏️ Cắt lỗ khẩn cấp': ('emergency_stop_roi', 'ROI âm bao nhiêu % thì đóng ngay dù SL đang tắt. 0 là tắt. Ví dụ 80, 120.'),
             '✏️ Tỷ lệ thân nến tối thiểu': ('body_ratio_min', 'Thân nến/range tối thiểu để tránh doji. Ví dụ 0.25.'),
             '✏️ Biên độ nến tối thiểu': ('min_range_pct', 'Range tối thiểu của nến theo % giá để tránh nến quá thấp. Ví dụ 0.08.'),
             '✏️ Thân nến tối thiểu': ('min_body_pct', 'Thân nến tối thiểu theo % giá. Ví dụ 0.03.'),
@@ -2980,6 +2951,8 @@ class BotManager:
             '✏️ Compare timeframe': ('compare_interval', 'Khung nến đã đóng gần nhất để so sánh body. Ví dụ: 1m, 15m, 1h.'),
             '✏️ Min elapsed seconds': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét. Ví dụ 6, 10, 15.'),
             '✏️ Speed up factor': ('speed_up_factor', 'Body hiện tại phải lớn hơn body nến so sánh bao nhiêu lần để có tín hiệu theo hướng nến hiện tại. Ví dụ 1.0, 1.2, 1.62.'),
+            '✏️ Exit body factor': ('exit_body_factor', 'Khi đang có lệnh: body ngược chiều chỉ cần lớn hơn body nến so sánh bao nhiêu lần để đóng/đảo.'),
+            '✏️ Emergency stop ROI': ('emergency_stop_roi', 'ROI âm bao nhiêu % thì đóng ngay dù SL đang tắt. 0 là tắt.'),
             '✏️ Min body ratio': ('body_ratio_min', 'Thân nến/range tối thiểu để tránh doji. Ví dụ 0.25.'),
             '✏️ Min range pct': ('min_range_pct', 'Range tối thiểu của nến theo % giá để tránh nến quá thấp. Ví dụ 0.08.'),
             '✏️ Min body pct': ('min_body_pct', 'Thân nến tối thiểu theo % giá. Ví dụ 0.03.'),
@@ -3115,6 +3088,9 @@ class BotManager:
                             raise ValueError
                     elif key == 'max_reverse_balance_percent':
                         if not (0 < val <= 100):
+                            raise ValueError
+                    elif key in ('strategy_tp_roi', 'strategy_sl_roi', 'emergency_stop_roi', 'profit_protect_enabled', 'low_volume_filter_enabled'):
+                        if val < 0:
                             raise ValueError
                     elif val <= 0:
                         raise ValueError
@@ -3290,7 +3266,7 @@ class BotManager:
             if success:
                 success_msg = (
                     f"✅ <b>ĐÃ TẠO BOT MARKET REGIME + SPEED THÀNH CÔNG</b>\n\n"
-                    f"🤖 Chiến lược: body length đa khung + profit protect\n"
+                    f"🤖 Chiến lược: nến trước vào ngược + exit riêng + emergency SL\n"
                     f"🔧 Chế độ: {bot_mode}\n"
                     f"🔢 Số bot: {bot_count}\n"
                     f"💰 Đòn bẩy: {leverage}x\n"
