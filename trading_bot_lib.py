@@ -230,15 +230,8 @@ def create_strategy_config_keyboard():
     return {
         "keyboard": [
             [{"text": "📊 Xem tham số chiến lược"}],
-            [{"text": "✏️ Kiểu chiến lược"}],
-            [{"text": "✏️ Khung nến hiện tại"}, {"text": "✏️ Khung nến so sánh"}],
+            [{"text": "✏️ Khung nến tín hiệu"}],
             [{"text": "✏️ Thời gian tối thiểu"}],
-            [{"text": "✏️ Hệ số tốc độ volume"}],
-            [{"text": "✏️ Hệ số body chung"}, {"text": "✏️ Hệ số body thoát"}],
-            [{"text": "✏️ Hệ số body cùng chiều"}, {"text": "✏️ Hệ số body ngược chiều"}],
-            [{"text": "✏️ Tỷ lệ thân nến tối thiểu"}, {"text": "✏️ Biên độ nến tối thiểu"}],
-            [{"text": "✏️ Thân nến tối thiểu"}, {"text": "✏️ Số nến vùng bẹt"}],
-            [{"text": "✏️ Biên độ vùng bẹt tối thiểu"}],
             [{"text": "✏️ TP chiến lược"}, {"text": "✏️ SL chiến lược"}],
             [{"text": "✏️ Cắt lỗ khẩn cấp"}],
             [{"text": "✏️ Lọc coin volume thấp"}, {"text": "✏️ Volume 24h tối thiểu"}],
@@ -256,20 +249,16 @@ def create_strategy_value_keyboard():
     """Bàn phím nhập giá trị tham số chiến lược - toàn bộ tiếng Việt."""
     return {
         "keyboard": [
-            [{"text": "prev_reverse"}, {"text": "prev_follow"}],
-            [{"text": "volume_speed_follow"}, {"text": "volume_speed_reverse"}],
-            [{"text": "body_compare_follow"}, {"text": "body_compare_reverse"}],
-            [{"text": "0"}, {"text": "0.25"}, {"text": "0.50"}],
-            [{"text": "0.70"}, {"text": "0.80"}, {"text": "1.00"}],
-            [{"text": "1.20"}, {"text": "1.50"}, {"text": "2.00"}],
             [{"text": "1m"}, {"text": "3m"}, {"text": "5m"}, {"text": "15m"}],
             [{"text": "30m"}, {"text": "1h"}, {"text": "2h"}, {"text": "4h"}],
+            [{"text": "0"}, {"text": "6"}, {"text": "10"}, {"text": "15"}],
+            [{"text": "50"}, {"text": "100"}, {"text": "120"}, {"text": "200"}],
+            [{"text": "1"}, {"text": "10000000"}, {"text": "20000000"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
         "resize_keyboard": True,
         "one_time_keyboard": True
     }
-
 
 def _wait_for_rate_limit():
     global _BINANCE_LAST_REQUEST_TIME
@@ -666,47 +655,18 @@ def _interval_seconds(interval=None):
     return float(_BINANCE_INTERVAL_SECONDS.get(_normalize_interval(interval), 60.0))
 
 class StrategyConfig:
-    """Cấu hình SIÊU CHIẾN LƯỢC nhiều kiểu tín hiệu, không dùng AI."""
-    MODES = {
-        'prev_reverse': 'Nến đã đóng gần nhất xanh thì SELL, đỏ thì BUY',
-        'prev_follow': 'Nến đã đóng gần nhất xanh thì BUY, đỏ thì SELL',
-        'volume_speed_follow': 'Tốc độ volume hiện tại > nến so sánh thì đi theo hướng nến hiện tại',
-        'volume_speed_reverse': 'Tốc độ volume hiện tại > nến so sánh thì đi NGƯỢC hướng nến hiện tại',
-        'body_compare_follow': 'Body hiện tại > body nến so sánh thì đi theo hướng nến hiện tại',
-        'body_compare_reverse': 'Body hiện tại > body nến so sánh thì đi NGƯỢC hướng nến hiện tại',
-    }
+    """Cấu hình chiến lược cộng nhị phân màu nến, không dùng AI và không dùng bộ lọc nến."""
     DEFAULTS = {
-        # Chọn chiến lược
-        'strategy_mode': 'volume_speed_follow',
-
-        # Khung nến
+        # Khung nến duy nhất dùng cho 2 nến đã đóng gần nhất + nến hiện tại
         'current_interval': '1m',
-        'compare_interval': '15m',
+        'signal_interval': '1m',
         'timeframe_seconds': 60.0,
         'min_elapsed_seconds': 6.0,
-
-        # Volume speed
-        'volume_reach_factor': 1.00,
-        'speed_up_factor': 1.00,
-        'speed_down_factor': 1.00,   # giữ tương thích, không bắt buộc dùng
-
-        # Body compare
-        'body_factor': 1.00,
-        'body_same_direction_factor': 1.00,
-        'body_opposite_direction_factor': 0.80,
-        'exit_body_factor': 0.70,
 
         # TP/SL và bảo vệ vị thế
         'emergency_stop_roi': 120.0,
         'strategy_tp_roi': 100.0,
         'strategy_sl_roi': 0.0,
-
-        # Bộ lọc nến, dùng cho volume/body compare. Prev-follow/reverse bỏ qua bộ lọc này.
-        'body_ratio_min': 0.25,
-        'min_range_pct': 0.08,
-        'min_body_pct': 0.03,
-        'flat_zone_lookback': 5,
-        'min_box_range_pct': 0.15,
 
         # Lọc coin / bảo vệ lợi nhuận
         'low_volume_filter_enabled': 1.0,
@@ -716,8 +676,8 @@ class StrategyConfig:
         'profit_protect_pullback_roi': 8.0,
         'max_reverse_count': 10,
     }
-    INT_KEYS = {'max_reverse_count', 'flat_zone_lookback'}
-    STRING_KEYS = {'current_interval', 'compare_interval', 'signal_interval', 'strategy_mode'}
+    INT_KEYS = {'max_reverse_count'}
+    STRING_KEYS = {'current_interval', 'signal_interval'}
 
     def __init__(self):
         self._config = self.DEFAULTS.copy()
@@ -733,6 +693,7 @@ class StrategyConfig:
         with self._lock:
             d = self._config.copy()
             d['signal_interval'] = d.get('current_interval', '1m')
+            d['timeframe_seconds'] = _interval_seconds(d.get('current_interval', '1m'))
             return d
 
     def update(self, **kwargs):
@@ -740,32 +701,15 @@ class StrategyConfig:
             for key, value in kwargs.items():
                 if key == 'signal_interval':
                     key = 'current_interval'
+                if key in ('compare_interval', 'strategy_mode'):
+                    # Giữ tương thích nút cũ: file này không còn dùng so sánh đa khung hay nhiều mode.
+                    continue
                 if key in self._config and value is not None:
-                    if key == 'strategy_mode':
-                        v = str(value or '').strip().lower()
-                        aliases = {
-                            '1': 'prev_reverse',
-                            '2': 'prev_follow',
-                            '3': 'volume_speed_follow',
-                            '4': 'volume_speed_reverse',
-                            '5': 'body_compare_follow',
-                            '6': 'body_compare_reverse',
-                            'nến trước vào ngược': 'prev_reverse',
-                            'nến trước đi theo': 'prev_follow',
-                            'volume theo hướng': 'volume_speed_follow',
-                            'volume vào ngược': 'volume_speed_reverse',
-                            'body theo hướng': 'body_compare_follow',
-                            'body vào ngược': 'body_compare_reverse',
-                        }
-                        v = aliases.get(v, v)
-                        if v not in self.MODES:
-                            raise ValueError('strategy_mode không hợp lệ')
-                        self._config[key] = v
-                    elif key in ('current_interval', 'compare_interval'):
+                    if key == 'current_interval':
                         value = _normalize_interval(value)
                         self._config[key] = value
-                        if key == 'current_interval':
-                            self._config['timeframe_seconds'] = _interval_seconds(value)
+                        self._config['signal_interval'] = value
+                        self._config['timeframe_seconds'] = _interval_seconds(value)
                     elif key in self.INT_KEYS:
                         self._config[key] = int(float(value))
                     else:
@@ -781,40 +725,26 @@ _STRATEGY_CONFIG = StrategyConfig()
 
 def get_strategy_config_text():
     c = _STRATEGY_CONFIG.get_all()
-    mode = str(c.get('strategy_mode', 'volume_speed_follow'))
-    mode_name = StrategyConfig.MODES.get(mode, mode)
     cur = _normalize_interval(c.get('current_interval', '1m'))
-    cmpi = _normalize_interval(c.get('compare_interval', '15m'))
     tp = float(c.get('strategy_tp_roi', 100.0) or 0.0)
     sl = float(c.get('strategy_sl_roi', 0.0) or 0.0)
     return (
-        "🎯 <b>SIÊU CHIẾN LƯỢC TỔNG HỢP - KHÔNG AI</b>\n\n"
-        f"• Kiểu chiến lược: <b>{mode}</b>\n"
-        f"  ↳ {mode_name}\n"
-        f"• Khung nến hiện tại: {cur} ({_interval_seconds(cur):.0f}s)\n"
-        f"• Khung nến so sánh đã đóng: {cmpi} ({_interval_seconds(cmpi):.0f}s)\n"
+        "🎯 <b>CHIẾN LƯỢC CỘNG NHỊ PHÂN MÀU NẾN - LẤY BIT KẾT QUẢ</b>\n\n"
+        f"• Khung nến tín hiệu: {cur} ({_interval_seconds(cur):.0f}s)\n"
         f"• Thời gian tối thiểu của nến hiện tại: {float(c.get('min_elapsed_seconds', 0.0)):.1f}s\n\n"
-        "📌 <b>CÁC KIỂU TÍN HIỆU</b>\n"
-        "1) <b>prev_reverse</b>: nến đã đóng xanh → SELL, đỏ → BUY. Không xét doji/body/range.\n"
-        "2) <b>prev_follow</b>: nến đã đóng xanh → BUY, đỏ → SELL. Không xét doji/body/range.\n"
-        "3) <b>volume_speed_follow</b>: tốc độ volume nến hiện tại cao hơn nến so sánh → theo hướng nến hiện tại.\n"
-        "4) <b>volume_speed_reverse</b>: tốc độ volume nến hiện tại cao hơn nến so sánh → vào ngược hướng nến hiện tại.\n"
-        "5) <b>body_compare_follow</b>: body hiện tại lớn hơn body nến so sánh → theo hướng nến hiện tại.\n"
-        "6) <b>body_compare_reverse</b>: body hiện tại lớn hơn body nến so sánh → vào ngược hướng nến hiện tại.\n\n"
-        "⚙️ <b>THAM SỐ VOLUME SPEED</b>\n"
-        f"• Hệ số tốc độ volume: {float(c.get('speed_up_factor', c.get('volume_reach_factor', 1.0))):.2f}x\n"
-        "• Công thức: tốc độ = volume / số giây. Nến hiện tại dùng thời gian đã chạy, nến so sánh dùng toàn bộ thời gian khung nến.\n\n"
-        "⚙️ <b>THAM SỐ BODY COMPARE</b>\n"
-        f"• Hệ số body chung: {float(c.get('body_factor', 1.0)):.2f}x\n"
-        f"• Hệ số body khi CÙNG chiều với nến so sánh: {float(c.get('body_same_direction_factor', 1.0)):.2f}x\n"
-        f"• Hệ số body khi NGƯỢC chiều với nến so sánh: {float(c.get('body_opposite_direction_factor', 0.8)):.2f}x\n"
-        f"• Hệ số body thoát/đảo: {float(c.get('exit_body_factor', 0.7)):.2f}x\n\n"
-        "🧱 <b>BỘ LỌC NẾN</b>\n"
-        f"• Tỷ lệ thân/range tối thiểu: {float(c.get('body_ratio_min', 0.25)):.2f}\n"
-        f"• Biên độ nến tối thiểu: {float(c.get('min_range_pct', 0.08)):.3f}%\n"
-        f"• Thân nến tối thiểu: {float(c.get('min_body_pct', 0.03)):.3f}%\n"
-        f"• Vùng bẹt: {int(c.get('flat_zone_lookback', 5))} nến | biên độ tối thiểu {float(c.get('min_box_range_pct', 0.15)):.3f}%\n"
-        "• Lưu ý: bộ lọc nến chỉ áp dụng cho volume_speed và body_compare; prev_reverse/prev_follow bỏ qua bộ lọc.\n\n"
+        "📌 <b>QUY TẮC TÍN HIỆU</b>\n"
+        "• Lấy đúng 3 nến cùng khung: 2 nến đã đóng gần nhất + nến hiện tại.\n"
+        "• Nến xanh = 1, nến đỏ = 0. Nếu open = close thì ép thành nến xanh = 1.\n"
+        "• Cộng 3 bit theo nhị phân và lấy bit cuối của kết quả.\n"
+        "• Kết quả bit cuối = 1 → BUY.\n"
+        "• Kết quả bit cuối = 0 → SELL.\n"
+        "• Không xét doji, body, biên độ, vùng bẹt, volume, AI.\n"
+        "• Riêng nến hiện tại phải chạy đủ thời gian tối thiểu mới xét.\n\n"
+        "🧮 <b>VÍ DỤ</b>\n"
+        "• Xanh + xanh + đỏ = 1 + 1 + 0 = 10₂ → lấy bit cuối 0 → SELL.\n"
+        "• Xanh + đỏ + xanh = 1 + 0 + 1 = 10₂ → lấy bit cuối 0 → SELL.\n"
+        "• Đỏ + xanh + đỏ = 0 + 1 + 0 = 1₂ → lấy bit cuối 1 → BUY.\n"
+        "• Xanh + xanh + xanh = 1 + 1 + 1 = 11₂ → lấy bit cuối 1 → BUY.\n\n"
         "🛡️ <b>TP/SL - QUẢN LÝ RỦI RO</b>\n"
         f"• TP chiến lược: {tp:.1f}% ROI ({'TẮT' if tp <= 0 else 'BẬT'})\n"
         f"• SL chiến lược: {sl:.1f}% ROI ({'TẮT' if sl <= 0 else 'BẬT'})\n"
@@ -980,121 +910,71 @@ def _body_pct_of(open_price, close_price):
         return 0.0
 
 
+def _binary_bit_from_side(side):
+    return 1 if side == 'BUY' else 0
+
 def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_curr,
                         prev_candle, market_candle=None, progress=1.0,
                         mode='entry', recent_1m_history=None, market_history=None, current_is_final=False):
-    """Bộ chấm điểm siêu chiến lược tổng hợp, không AI.
+    """Chiến lược cuối: cộng nhị phân màu nến.
 
-    mode chiến lược:
-    - prev_reverse / prev_follow: dùng nến đã đóng gần nhất, bỏ qua doji/body/range.
-    - volume_speed_follow / volume_speed_reverse: so tốc độ volume đa khung.
-    - body_compare_follow / body_compare_reverse: so độ dài body đa khung.
-      Riêng body compare có 2 hệ số khác nhau:
-        + current cùng chiều với nến so sánh: body_same_direction_factor
-        + current ngược chiều với nến so sánh: body_opposite_direction_factor
+    Dùng đúng 3 nến cùng khung:
+    - nến đã đóng thứ 2 gần nhất
+    - nến đã đóng gần nhất
+    - nến hiện tại
+
+    Màu nến:
+    - xanh = 1
+    - đỏ = 0
+    - open == close ép thành xanh = 1
+
+    Cộng 3 bit theo nhị phân và lấy bit cuối của kết quả:
+    - 110 => 1+1+0 = 10₂, bit cuối 0 => SELL
+    - 111 => 1+1+1 = 11₂, bit cuối 1 => BUY
+    - kết quả bit cuối 1 => BUY
+    - kết quả bit cuối 0 => SELL
     """
     try:
         cfg = _STRATEGY_CONFIG.get_all()
-        strategy_mode = str(cfg.get('strategy_mode', 'volume_speed_follow')).strip().lower()
         cur_interval = _normalize_interval(cfg.get('current_interval', '1m'))
-        cmp_interval = _normalize_interval(cfg.get('compare_interval', cur_interval))
-        current_side = _current_side_from_prices(open_curr, current_price)
-
-        if not prev_candle:
-            return None, 0, 'missing_compare_closed_candle', False
-
-        prev_open = float(_candle_get(prev_candle, 'open', 1))
-        prev_high = float(_candle_get(prev_candle, 'high', 2))
-        prev_low = float(_candle_get(prev_candle, 'low', 3))
-        prev_close = float(_candle_get(prev_candle, 'close', 4))
-        prev_volume = max(0.0, float(_candle_get(prev_candle, 'volume', 5)))
-        prev_side = _candle_direction(prev_open, prev_close)
-
-        # 1) Nến trước vào ngược / đi theo: không dùng bộ lọc, không có None.
-        if strategy_mode in ('prev_reverse', 'prev_follow'):
-            if strategy_mode == 'prev_reverse':
-                signal = _opposite_side(prev_side)
-                reason = f'prev_reverse_ok | interval={cur_interval} prev_side={prev_side} signal={signal} mode={mode}'
-            else:
-                signal = prev_side
-                reason = f'prev_follow_ok | interval={cur_interval} prev_side={prev_side} signal={signal} mode={mode}'
-            return signal, 1, reason, False
-
-        # Từ đây là volume/body: yêu cầu nến hiện tại đạt lọc nến tối thiểu.
         elapsed = max(0.001, float(progress or 0.0) * _interval_seconds(cur_interval))
         min_elapsed = float(cfg.get('min_elapsed_seconds', 6.0) or 0.0)
         if elapsed < min_elapsed:
             return None, 0, f'elapsed_too_early {elapsed:.1f}s < {min_elapsed:.1f}s', False
 
-        current_ok, current_info = _is_tradeable_candle(open_curr, current_price, high_curr, low_curr)
-        if not current_ok:
-            return None, 0, f'current_candle_not_tradeable:{current_info.get("reason")}', False
+        history = list(recent_1m_history or market_history or [])
+        if len(history) >= 2:
+            prev2_candle = history[-2]
+            prev1_candle = history[-1]
+        else:
+            # prev_candle chỉ là nến đã đóng gần nhất. Nếu thiếu nến đóng thứ 2 thì chưa đủ 3 nến để cộng.
+            return None, 0, 'missing_two_closed_candles', False
 
-        # Với entry, nếu có history thì tránh vùng bẹt. Với exit, nhẹ hơn để không cản đóng lệnh.
-        if mode == 'entry' and recent_1m_history:
-            is_flat, flat_info = _is_flat_zone(recent_1m_history, current_price=current_price)
-            if is_flat:
-                return None, 0, f'flat_zone_block:{flat_info.get("box_range_pct", 0):.4f}%', False
+        prev2_open = float(_candle_get(prev2_candle, 'open', 1))
+        prev2_close = float(_candle_get(prev2_candle, 'close', 4))
+        prev1_open = float(_candle_get(prev1_candle, 'open', 1))
+        prev1_close = float(_candle_get(prev1_candle, 'close', 4))
 
-        # Nến so sánh cũng phải đạt chuẩn trong entry; exit thì không quá khắt khe.
-        if mode == 'entry':
-            prev_ok, prev_info = _is_tradeable_candle(prev_open, prev_close, prev_high, prev_low)
-            if not prev_ok:
-                return None, 0, f'compare_candle_not_tradeable:{prev_info.get("reason")}', False
+        prev2_side = _candle_direction(prev2_open, prev2_close)
+        prev1_side = _candle_direction(prev1_open, prev1_close)
+        current_side = _candle_direction(open_curr, current_price)
 
-        # 2) Volume speed đa khung
-        if strategy_mode in ('volume_speed_follow', 'volume_speed_reverse'):
-            current_seconds = max(0.001, elapsed)
-            compare_seconds = _interval_seconds(cmp_interval)
-            current_speed = max(0.0, float(volume_curr)) / current_seconds
-            previous_speed = prev_volume / max(0.001, compare_seconds)
-            factor = float(cfg.get('speed_up_factor', cfg.get('volume_reach_factor', 1.0)) or 1.0)
-            if current_speed <= previous_speed * factor:
-                return None, 0, (
-                    f'volume_speed_not_enough | current={current_speed:.6f}/s '
-                    f'previous={previous_speed:.6f}/s factor={factor:.2f}'
-                ), False
-            signal = current_side if strategy_mode == 'volume_speed_follow' else _opposite_side(current_side)
-            reason = (
-                f'{strategy_mode}_ok | cur_tf={cur_interval} cmp_tf={cmp_interval} '
-                f'current_speed={current_speed:.6f}/s previous_speed={previous_speed:.6f}/s '
-                f'factor={factor:.2f} current_side={current_side} signal={signal}'
-            )
-            return signal, 1, reason, False
-
-        # 3) Body compare đa khung, có hệ số khác nhau cho cùng/ngược chiều.
-        if strategy_mode in ('body_compare_follow', 'body_compare_reverse'):
-            current_body_pct = _body_pct_of(open_curr, current_price)
-            previous_body_pct = _body_pct_of(prev_open, prev_close)
-            if previous_body_pct <= 0:
-                return None, 0, 'previous_body_zero', False
-            same_direction = (current_side == prev_side)
-            base_factor = float(cfg.get('body_factor', 1.0) or 1.0)
-            if same_direction:
-                dir_factor = float(cfg.get('body_same_direction_factor', base_factor) or base_factor)
-                relation = 'same_direction'
-            else:
-                dir_factor = float(cfg.get('body_opposite_direction_factor', base_factor) or base_factor)
-                relation = 'opposite_direction'
-            if mode == 'exit':
-                dir_factor = min(dir_factor, float(cfg.get('exit_body_factor', dir_factor) or dir_factor))
-            need = previous_body_pct * dir_factor
-            if current_body_pct <= need:
-                return None, 0, (
-                    f'body_not_big_enough | relation={relation} current_body={current_body_pct:.5f}% '
-                    f'previous_body={previous_body_pct:.5f}% factor={dir_factor:.2f} need>{need:.5f}%'
-                ), False
-            signal = current_side if strategy_mode == 'body_compare_follow' else _opposite_side(current_side)
-            reason = (
-                f'{strategy_mode}_ok | cur_tf={cur_interval} cmp_tf={cmp_interval} relation={relation} '
-                f'current_body={current_body_pct:.5f}% previous_body={previous_body_pct:.5f}% '
-                f'factor={dir_factor:.2f} current_side={current_side} prev_side={prev_side} signal={signal}'
-            )
-            return signal, 1, reason, False
-
-        return None, 0, f'unknown_strategy_mode:{strategy_mode}', False
+        b2 = _binary_bit_from_side(prev2_side)
+        b1 = _binary_bit_from_side(prev1_side)
+        bc = _binary_bit_from_side(current_side)
+        bit_pattern = f'{b2}{b1}{bc}'
+        total = b2 + b1 + bc
+        result_bit = total % 2
+        binary_sum = format(total, 'b')
+        signal = 'BUY' if result_bit == 1 else 'SELL'
+        reason = (
+            f'binary_candle_xor_ok | interval={cur_interval} mode={mode} elapsed={elapsed:.1f}s '
+            f'prev2={prev2_side}:{b2} prev1={prev1_side}:{b1} current={current_side}:{bc} '
+            f'pattern={bit_pattern} total={binary_sum}₂({total}) result_bit={result_bit} signal={signal}'
+        )
+        return signal, 1, reason, False
     except Exception as e:
-        logger.error(f"Lỗi chấm điểm siêu chiến lược: {e}")
+        logger.error(f"Lỗi chấm điểm cộng nhị phân màu nến: {e}")
         return None, 0, 'error', False
 
 def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
@@ -1107,45 +987,32 @@ def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
     }
 
 def _fetch_rest_1m15m_signal_data(symbol):
-    """Tên cũ giữ để tương thích: lấy nến hiện tại và nến so sánh theo cấu hình siêu chiến lược."""
+    """Tên cũ giữ để tương thích: lấy nến hiện tại + 2 nến đã đóng gần nhất cùng khung."""
     try:
         cfg = _STRATEGY_CONFIG.get_all()
-        strategy_mode = str(cfg.get('strategy_mode', 'volume_speed_follow')).strip().lower()
         current_interval = _normalize_interval(cfg.get('current_interval', '1m'))
-        compare_interval = _normalize_interval(cfg.get('compare_interval', current_interval))
         symbol = symbol.upper()
         now = time.time()
-        key = (symbol, strategy_mode, current_interval, compare_interval, 'super_multi')
+        key = (symbol, current_interval, 'binary_candle_color')
         cached = _SIGNAL_DATA_CACHE.get(key)
         if cached and now - cached.get('ts', 0) < _SIGNAL_DATA_CACHE_TTL:
             return cached['data']
 
         url = "https://fapi.binance.com/fapi/v1/klines"
-        limit = max(int(cfg.get('flat_zone_lookback', 5)) + 3, 8)
-        curr_data = binance_api_request(url, params={"symbol": symbol, "interval": current_interval, "limit": limit})
-        if not curr_data or len(curr_data) < 2:
+        curr_data = binance_api_request(url, params={"symbol": symbol, "interval": current_interval, "limit": 5})
+        if not curr_data or len(curr_data) < 3:
             return None, None, None, []
+
         curr = curr_data[-1]
         current_closed_prev = curr_data[-2]
         closed_history = list(curr_data[:-1])
 
-        if strategy_mode in ('prev_reverse', 'prev_follow'):
-            prev = current_closed_prev
-        elif compare_interval == current_interval:
-            prev = current_closed_prev
-        else:
-            cmp_data = binance_api_request(url, params={"symbol": symbol, "interval": compare_interval, "limit": 3})
-            if not cmp_data or len(cmp_data) < 2:
-                return curr, current_closed_prev, None, closed_history
-            # Binance kline REST thường trả cây hiện tại ở cuối; cây đã đóng gần nhất là [-2].
-            prev = cmp_data[-2]
-
-        result = (curr, prev, None, closed_history)
+        result = (curr, current_closed_prev, None, closed_history)
         _cleanup_signal_data_cache()
         _SIGNAL_DATA_CACHE[key] = {'ts': now, 'data': result}
         return result
     except Exception as e:
-        logger.error(f"Lỗi REST lấy dữ liệu siêu chiến lược {symbol}: {e}")
+        logger.error(f"Lỗi REST lấy dữ liệu cộng nhị phân màu nến {symbol}: {e}")
         return None, None, None, []
 
 def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, recent_1m_history=None):
@@ -1163,18 +1030,18 @@ def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, r
         )
         return signal
     except Exception as e:
-        logger.error(f"Lỗi tính tín hiệu từ nến nến trước vào ngược: {e}")
+        logger.error(f"Lỗi tính tín hiệu cộng nhị phân màu nến: {e}")
         return None
 
 def get_candle_signal_1h(symbol):
-    """Tên cũ để tương thích: thực tế dùng nến-trước-vào-ngược theo khung nến đã chọn."""
+    """Tên cũ để tương thích: thực tế dùng cộng nhị phân màu nến theo khung đã chọn."""
     try:
         curr, prev1, prev15, history = _fetch_rest_1m15m_signal_data(symbol)
         if not curr or not prev1:
             return None
         return compute_signal_from_candles(prev1, curr, prev15, history)
     except Exception as e:
-        logger.error(f"Lỗi phân tích tín hiệu nến trước vào ngược {symbol}: {e}")
+        logger.error(f"Lỗi phân tích tín hiệu cộng nhị phân màu nến {symbol}: {e}")
         return None
 
 def get_positions(symbol=None, api_key=None, api_secret=None):
@@ -1986,7 +1853,7 @@ class BaseBot:
             details = {'signal': signal, 'score': score, 'reason': reason, 'is_spike': is_spike, 'progress': progress}
             return details if return_details else signal
         except Exception as e:
-            logger.error(f"Lỗi compute signal nến trước vào ngược: {e}")
+            logger.error(f"Lỗi compute signal cộng nhị phân màu nến: {e}")
             details = {'signal': None, 'score': 0, 'reason': 'error', 'is_spike': False}
             return details if return_details else None
 
@@ -2078,11 +1945,11 @@ class BaseBot:
                 market_candle['history'] = market_history
             return conv(curr, False, interval), conv(prev, True, interval), market_candle, market_history
         except Exception as e:
-            logger.error(f"Lỗi REST fallback lấy nến nến-trước-vào-ngược {symbol}: {e}")
+            logger.error(f"Lỗi REST fallback lấy nến cộng nhị phân màu nến {symbol}: {e}")
             return None, None, None, []
 
     def _debug_realtime_signal(self, symbol, current_side=None):
-        """Log nhanh lý do chưa có tín hiệu để kiểm tra volume/body thực tế bot đang thấy."""
+        """Log nhanh lý do chưa có tín hiệu để kiểm tra cộng nhị phân màu nến."""
         try:
             now = time.time()
             if now - self.last_signal_debug_time.get(symbol, 0) < 5:
@@ -2133,7 +2000,7 @@ class BaseBot:
             return
 
         self.log(
-            f"🕯️ {symbol} - Tín hiệu body ngược đủ chuẩn ({signal} vs {current_side}) | "
+            f"🧮 {symbol} - Tín hiệu nhị phân ngược vị thế ({signal} vs {current_side}) | "
             f"score={details.get('score')} | {details.get('reason')} | đóng lệnh và đảo chiều ngay"
         )
         self._close_symbol_position(symbol, reason="Candle opposite (same realtime signal)", reverse_side=signal)
@@ -2948,12 +2815,13 @@ class BotManager:
 
     def send_main_menu(self, chat_id):
         welcome = (
-            "🤖 <b>BOT GIAO DỊCH FUTURES - NẾN TRƯỚC VÀO NGƯỢC</b>\n\n"
+            "🤖 <b>BOT GIAO DỊCH FUTURES - CỘNG NHỊ PHÂN LẤY BIT CUỐI</b>\n\n"
             "🎯 <b>CƠ CHẾ HOẠT ĐỘNG:</b>\n"
             "• Chọn khung nến tín hiệu trong mục 🎯 Chiến lược.\n"
-            "• Nến đã đóng gần nhất xanh → bot vào/đảo SELL.\n"
-            "• Nến đã đóng gần nhất đỏ → bot vào/đảo BUY.\n"
-            "• Bỏ qua doji/thân nến/biên độ/vùng bẹt khi tạo tín hiệu.\n"
+            "• Lấy 2 nến đã đóng gần nhất + nến hiện tại cùng khung.\n"
+            "• Nến xanh = 1, nến đỏ = 0.\n"
+            "• Cộng 3 bit theo nhị phân rồi lấy bit cuối: bit 1 → BUY, bit 0 → SELL.\n"
+            "• Bỏ qua doji/thân nến/biên độ/vùng bẹt/volume khi tạo tín hiệu.\n"
             "• TP/SL trong mục Chiến lược có thể chỉnh sau khi bot đã vào lệnh.\n"
             "• Khi có vị thế, bot đồng bộ vị thế thật Binance trước TP/SL/đảo chiều.\n\n"
             "📌 <b>LƯU Ý:</b> Có thể chỉnh tham số từ nút 🎯 Chiến lược."
@@ -3126,50 +2994,28 @@ class BotManager:
         current_step = user_state.get('step')
 
         strategy_key_map = {
-            '✏️ Kiểu chiến lược': ('strategy_mode', 'Chọn 1 trong các kiểu: prev_reverse, prev_follow, volume_speed_follow, volume_speed_reverse, body_compare_follow, body_compare_reverse.'),
-            '✏️ Khung nến tín hiệu': ('current_interval', 'Khung nến hiện tại hoặc khung nến tín hiệu. Ví dụ: 1m, 3m, 5m, 15m, 1h.'),
-            '✏️ Khung nến hiện tại': ('current_interval', 'Tên cũ: khung nến tín hiệu. Ví dụ: 1m, 3m, 5m, 15m.'),
-            '✏️ Khung nến so sánh': ('compare_interval', 'Tên cũ, logic mới không dùng. Nên chỉnh Khung nến tín hiệu.'),
-            '✏️ Signal timeframe': ('current_interval', 'Tên cũ: khung nến hiện tại để đo body realtime.'),
-            '✏️ Thời gian tối thiểu': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét. Ví dụ 6, 10, 15.'),
-            '✏️ Hệ số tốc độ volume': ('speed_up_factor', 'Tốc độ volume hiện tại phải lớn hơn tốc độ nến so sánh bao nhiêu lần. Ví dụ 1.0, 1.2, 1.5.'),
-            '✏️ Hệ số body chung': ('body_factor', 'Hệ số body chung dùng khi chưa muốn tách cùng/ngược chiều. Ví dụ 1.0, 1.2.'),
-            '✏️ Hệ số body cùng chiều': ('body_same_direction_factor', 'Trong body_compare: nếu nến hiện tại cùng chiều với nến so sánh thì dùng hệ số này. Ví dụ 1.0, 1.2.'),
-            '✏️ Hệ số body ngược chiều': ('body_opposite_direction_factor', 'Trong body_compare: nếu nến hiện tại ngược chiều với nến so sánh thì dùng hệ số này. Ví dụ 0.7, 0.8, 1.0.'),
-            '✏️ Hệ số độ dài body': ('speed_up_factor', 'Khi vào lệnh: body hiện tại phải lớn hơn body nến so sánh bao nhiêu lần. Ví dụ 1.0, 1.2, 1.62.'),
-            '✏️ Hệ số body thoát': ('exit_body_factor', 'Khi đang có lệnh: body ngược chiều chỉ cần lớn hơn body nến so sánh bao nhiêu lần để đóng/đảo. Ví dụ 0.5, 0.7, 1.0.'),
+            '✏️ Khung nến tín hiệu': ('current_interval', 'Khung nến dùng cho 2 nến đã đóng gần nhất và nến hiện tại. Ví dụ: 1m, 3m, 5m, 15m, 1h.'),
+            '✏️ Khung nến hiện tại': ('current_interval', 'Tên cũ: khung nến tín hiệu. Ví dụ: 1m, 3m, 5m, 15m, 1h.'),
+            '✏️ Signal timeframe': ('current_interval', 'Tên cũ: khung nến tín hiệu.'),
+            '✏️ Thời gian tối thiểu': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét tín hiệu. Ví dụ 6, 10, 15.'),
             '✏️ TP chiến lược': ('strategy_tp_roi', 'TP theo ROI đã nhân đòn bẩy. Có thể chỉnh sau khi bot đã vào lệnh. Nhập 0 để tắt. Ví dụ 50, 100, 150.'),
             '✏️ SL chiến lược': ('strategy_sl_roi', 'SL theo ROI đã nhân đòn bẩy. Có thể chỉnh sau khi bot đã vào lệnh. Nhập 0 để tắt. Ví dụ 50, 100, 150.'),
             '✏️ Cắt lỗ khẩn cấp': ('emergency_stop_roi', 'ROI âm bao nhiêu % thì đóng ngay dù SL đang tắt. 0 là tắt. Ví dụ 80, 120.'),
-            '✏️ Tỷ lệ thân nến tối thiểu': ('body_ratio_min', 'Thân nến/range tối thiểu để tránh doji. Ví dụ 0.25.'),
-            '✏️ Biên độ nến tối thiểu': ('min_range_pct', 'Range tối thiểu của nến theo % giá để tránh nến quá thấp. Ví dụ 0.08.'),
-            '✏️ Thân nến tối thiểu': ('min_body_pct', 'Thân nến tối thiểu theo % giá. Ví dụ 0.03.'),
-            '✏️ Số nến vùng bẹt': ('flat_zone_lookback', 'Số nến đóng gần nhất để kiểm tra vùng bẹt. 0 hoặc 1 = tắt. Ví dụ 5.'),
-            '✏️ Biên độ vùng bẹt tối thiểu': ('min_box_range_pct', 'Range tối thiểu của cụm nến theo % giá để tránh vùng bẹt. Ví dụ 0.15.'),
-            '✏️ Lọc coin volume thấp': ('low_volume_filter_enabled', '1 = bật lọc coin volume 24h thấp; 0 = tắt'),
-            '✏️ Volume 24h tối thiểu': ('min_24h_volume', 'Volume 24h tối thiểu của coin để bot động chọn. Ví dụ 10000000, 50000000'),
+            '✏️ Lọc coin volume thấp': ('low_volume_filter_enabled', '1 = bật lọc coin volume 24h thấp; 0 = tắt.'),
+            '✏️ Volume 24h tối thiểu': ('min_24h_volume', 'Volume 24h tối thiểu của coin để bot tự động chọn. Ví dụ 10000000, 50000000.'),
             '✏️ Bảo vệ lợi nhuận': ('profit_protect_enabled', '1 = bật hút lực từ đỉnh, 0 = tắt.'),
             '✏️ ROI bắt đầu bảo vệ': ('profit_protect_start_roi', 'ROI tối thiểu để bắt đầu bảo vệ lợi nhuận. Ví dụ 10, 20, 30.'),
             '✏️ ROI tụt từ đỉnh để đóng': ('profit_protect_pullback_roi', 'Khi ROI tụt khỏi đỉnh bao nhiêu % thì đóng. Ví dụ 5, 8, 10.'),
             # Alias tiếng Anh cũ để tương thích nếu Telegram còn nút cũ trong lịch sử chat
-            '✏️ Current timeframe': ('current_interval', 'Khung nến hiện tại để đo body realtime. Ví dụ: 1m, 3m, 5m, 15m.'),
-            '✏️ Compare timeframe': ('compare_interval', 'Khung nến đã đóng gần nhất để so sánh body. Ví dụ: 1m, 15m, 1h.'),
-            '✏️ Min elapsed seconds': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét. Ví dụ 6, 10, 15.'),
-            '✏️ Speed up factor': ('speed_up_factor', 'Body hiện tại phải lớn hơn body nến so sánh bao nhiêu lần để có tín hiệu theo hướng nến hiện tại. Ví dụ 1.0, 1.2, 1.62.'),
-            '✏️ Exit body factor': ('exit_body_factor', 'Khi đang có lệnh: body ngược chiều chỉ cần lớn hơn body nến so sánh bao nhiêu lần để đóng/đảo.'),
+            '✏️ Current timeframe': ('current_interval', 'Khung nến tín hiệu.'),
+            '✏️ Min elapsed seconds': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét tín hiệu.'),
             '✏️ Emergency stop ROI': ('emergency_stop_roi', 'ROI âm bao nhiêu % thì đóng ngay dù SL đang tắt. 0 là tắt.'),
-            '✏️ Min body ratio': ('body_ratio_min', 'Thân nến/range tối thiểu để tránh doji. Ví dụ 0.25.'),
-            '✏️ Min range pct': ('min_range_pct', 'Range tối thiểu của nến theo % giá để tránh nến quá thấp. Ví dụ 0.08.'),
-            '✏️ Min body pct': ('min_body_pct', 'Thân nến tối thiểu theo % giá. Ví dụ 0.03.'),
-            '✏️ Flat zone lookback': ('flat_zone_lookback', 'Số nến đóng gần nhất để kiểm tra vùng bẹt. 0 hoặc 1 = tắt. Ví dụ 5.'),
-            '✏️ Min box range pct': ('min_box_range_pct', 'Range tối thiểu của cụm nến theo % giá để tránh vùng bẹt. Ví dụ 0.15.'),
-            '✏️ Low volume filter': ('low_volume_filter_enabled', '1 = bật lọc coin volume 24h thấp; 0 = tắt'),
-            '✏️ Min 24h volume': ('min_24h_volume', 'Volume 24h tối thiểu của coin để bot động chọn. Ví dụ 10000000, 50000000'),
+            '✏️ Low volume filter': ('low_volume_filter_enabled', '1 = bật lọc coin volume 24h thấp; 0 = tắt.'),
+            '✏️ Min 24h volume': ('min_24h_volume', 'Volume 24h tối thiểu của coin để bot tự động chọn.'),
             '✏️ Profit protect ON/OFF': ('profit_protect_enabled', '1 = bật hút lực từ đỉnh, 0 = tắt.'),
-            '✏️ Profit start ROI': ('profit_protect_start_roi', 'ROI tối thiểu để bắt đầu bảo vệ lợi nhuận. Ví dụ 10, 20, 30.'),
-            '✏️ Profit pullback ROI': ('profit_protect_pullback_roi', 'Khi ROI tụt khỏi đỉnh bao nhiêu % thì đóng. Ví dụ 5, 8, 10.'),
+            '✏️ Profit start ROI': ('profit_protect_start_roi', 'ROI tối thiểu để bắt đầu bảo vệ lợi nhuận.'),
+            '✏️ Profit pullback ROI': ('profit_protect_pullback_roi', 'Khi ROI tụt khỏi đỉnh bao nhiêu % thì đóng.'),
         }
-
         if text == "📊 Danh sách Bot":
             if not self.bots:
                 send_telegram("🤖 Hiện không có bot nào đang chạy.", chat_id=chat_id,
@@ -3280,10 +3126,7 @@ class BotManager:
                 return
             try:
                 key = user_state.get('strategy_key')
-                if key == 'strategy_mode':
-                    val = text.strip().lower()
-                    _STRATEGY_CONFIG.update(**{key: val})
-                elif key in ('signal_interval', 'current_interval', 'compare_interval', 'market_interval'):
+                if key in ('signal_interval', 'current_interval', 'compare_interval', 'market_interval'):
                     val = _normalize_interval(text)
                     if val != text.strip().lower():
                         raise ValueError
