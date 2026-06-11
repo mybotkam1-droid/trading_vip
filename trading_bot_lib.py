@@ -230,8 +230,14 @@ def create_strategy_config_keyboard():
     return {
         "keyboard": [
             [{"text": "📊 Xem tham số chiến lược"}],
-            [{"text": "✏️ Khung nến tín hiệu"}],
+            [{"text": "✏️ Khung nến dự đoán"}, {"text": "✏️ Khung xu hướng lớn"}],
             [{"text": "✏️ Thời gian tối thiểu"}],
+            [{"text": "✏️ Điểm vào lệnh"}, {"text": "✏️ Điểm đảo/thoát"}],
+            [{"text": "✏️ Số nến thống kê"}, {"text": "✏️ Số nến xu hướng"}],
+            [{"text": "✏️ Số nến phá vùng"}],
+            [{"text": "✏️ Trọng số thân nến"}, {"text": "✏️ Trọng số xu hướng"}],
+            [{"text": "✏️ Trọng số volume"}, {"text": "✏️ Trọng số phá vùng"}],
+            [{"text": "✏️ Trọng số khung lớn"}],
             [{"text": "✏️ TP chiến lược"}, {"text": "✏️ SL chiến lược"}],
             [{"text": "✏️ Cắt lỗ khẩn cấp"}],
             [{"text": "✏️ Lọc coin volume thấp"}, {"text": "✏️ Volume 24h tối thiểu"}],
@@ -251,9 +257,12 @@ def create_strategy_value_keyboard():
         "keyboard": [
             [{"text": "1m"}, {"text": "3m"}, {"text": "5m"}, {"text": "15m"}],
             [{"text": "30m"}, {"text": "1h"}, {"text": "2h"}, {"text": "4h"}],
-            [{"text": "0"}, {"text": "6"}, {"text": "10"}, {"text": "15"}],
+            [{"text": "6"}, {"text": "10"}, {"text": "15"}, {"text": "30"}],
+            [{"text": "35"}, {"text": "45"}, {"text": "55"}, {"text": "70"}],
+            [{"text": "8"}, {"text": "12"}, {"text": "24"}, {"text": "40"}],
+            [{"text": "0"}, {"text": "0.5"}, {"text": "1"}, {"text": "1.5"}, {"text": "2"}],
             [{"text": "50"}, {"text": "100"}, {"text": "120"}, {"text": "200"}],
-            [{"text": "1"}, {"text": "10000000"}, {"text": "20000000"}],
+            [{"text": "10000000"}, {"text": "20000000"}, {"text": "50000000"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
         "resize_keyboard": True,
@@ -655,13 +664,32 @@ def _interval_seconds(interval=None):
     return float(_BINANCE_INTERVAL_SECONDS.get(_normalize_interval(interval), 60.0))
 
 class StrategyConfig:
-    """Cấu hình chiến lược cộng nhị phân màu nến, không dùng AI và không dùng bộ lọc nến."""
+    """Cấu hình chiến lược dự đoán thống kê đa yếu tố.
+
+    Đây không phải AI và không có bảo đảm thắng 100%. File này cố gắng gom nhiều dấu hiệu
+    tốt hơn: hướng thân nến, tốc độ volume, độ dốc xu hướng, phá vùng và xu hướng khung lớn.
+    """
     DEFAULTS = {
-        # Khung nến duy nhất dùng cho 2 nến đã đóng gần nhất + nến hiện tại
         'current_interval': '1m',
         'signal_interval': '1m',
+        'market_interval': '15m',
         'timeframe_seconds': 60.0,
         'min_elapsed_seconds': 6.0,
+
+        # Ngưỡng chấm điểm. Score nằm trong [-100, 100].
+        'entry_score': 55,
+        'exit_score': 35,
+        'history_lookback': 24,
+        'trend_lookback': 12,
+        'breakout_lookback': 20,
+
+        # Trọng số mô hình thống kê
+        'body_weight': 1.20,
+        'trend_weight': 1.25,
+        'volume_weight': 1.00,
+        'breakout_weight': 1.05,
+        'market_weight': 0.85,
+        'reversal_guard_weight': 0.65,
 
         # TP/SL và bảo vệ vị thế
         'emergency_stop_roi': 120.0,
@@ -676,8 +704,8 @@ class StrategyConfig:
         'profit_protect_pullback_roi': 8.0,
         'max_reverse_count': 10,
     }
-    INT_KEYS = {'max_reverse_count'}
-    STRING_KEYS = {'current_interval', 'signal_interval'}
+    INT_KEYS = {'entry_score', 'exit_score', 'history_lookback', 'trend_lookback', 'breakout_lookback', 'max_reverse_count'}
+    STRING_KEYS = {'current_interval', 'signal_interval', 'market_interval'}
 
     def __init__(self):
         self._config = self.DEFAULTS.copy()
@@ -701,15 +729,17 @@ class StrategyConfig:
             for key, value in kwargs.items():
                 if key == 'signal_interval':
                     key = 'current_interval'
-                if key in ('compare_interval', 'strategy_mode'):
-                    # Giữ tương thích nút cũ: file này không còn dùng so sánh đa khung hay nhiều mode.
+                if key == 'compare_interval':
+                    key = 'market_interval'
+                if key == 'strategy_mode':
                     continue
                 if key in self._config and value is not None:
-                    if key == 'current_interval':
+                    if key in ('current_interval', 'market_interval'):
                         value = _normalize_interval(value)
                         self._config[key] = value
-                        self._config['signal_interval'] = value
-                        self._config['timeframe_seconds'] = _interval_seconds(value)
+                        if key == 'current_interval':
+                            self._config['signal_interval'] = value
+                            self._config['timeframe_seconds'] = _interval_seconds(value)
                     elif key in self.INT_KEYS:
                         self._config[key] = int(float(value))
                     else:
@@ -722,29 +752,38 @@ class StrategyConfig:
         return self.get_all()
 
 _STRATEGY_CONFIG = StrategyConfig()
+_MARKET_HISTORY_CACHE = {}
+
 
 def get_strategy_config_text():
     c = _STRATEGY_CONFIG.get_all()
     cur = _normalize_interval(c.get('current_interval', '1m'))
+    market = _normalize_interval(c.get('market_interval', '15m'))
     tp = float(c.get('strategy_tp_roi', 100.0) or 0.0)
     sl = float(c.get('strategy_sl_roi', 0.0) or 0.0)
     return (
-        "🎯 <b>CHIẾN LƯỢC CỘNG NHỊ PHÂN MÀU NẾN - LẤY BIT KẾT QUẢ</b>\n\n"
-        f"• Khung nến tín hiệu: {cur} ({_interval_seconds(cur):.0f}s)\n"
-        f"• Thời gian tối thiểu của nến hiện tại: {float(c.get('min_elapsed_seconds', 0.0)):.1f}s\n\n"
-        "📌 <b>QUY TẮC TÍN HIỆU</b>\n"
-        "• Lấy đúng 3 nến cùng khung: 2 nến đã đóng gần nhất + nến hiện tại.\n"
-        "• Nến xanh = 1, nến đỏ = 0. Nếu open = close thì ép thành nến xanh = 1.\n"
-        "• Cộng 3 bit theo nhị phân và lấy bit cuối của kết quả.\n"
-        "• Kết quả bit cuối = 1 → BUY.\n"
-        "• Kết quả bit cuối = 0 → SELL.\n"
-        "• Không xét doji, body, biên độ, vùng bẹt, volume, AI.\n"
-        "• Riêng nến hiện tại phải chạy đủ thời gian tối thiểu mới xét.\n\n"
-        "🧮 <b>VÍ DỤ</b>\n"
-        "• Xanh + xanh + đỏ = 1 + 1 + 0 = 10₂ → lấy bit cuối 0 → SELL.\n"
-        "• Xanh + đỏ + xanh = 1 + 0 + 1 = 10₂ → lấy bit cuối 0 → SELL.\n"
-        "• Đỏ + xanh + đỏ = 0 + 1 + 0 = 1₂ → lấy bit cuối 1 → BUY.\n"
-        "• Xanh + xanh + xanh = 1 + 1 + 1 = 11₂ → lấy bit cuối 1 → BUY.\n\n"
+        "🎯 <b>CHIẾN LƯỢC DỰ ĐOÁN THỐNG KÊ ĐA YẾU TỐ</b>\n\n"
+        f"• Khung nến dự đoán: {cur} ({_interval_seconds(cur):.0f}s)\n"
+        f"• Khung xu hướng lớn: {market} ({_interval_seconds(market):.0f}s)\n"
+        f"• Thời gian tối thiểu của nến hiện tại: {float(c.get('min_elapsed_seconds', 0.0)):.1f}s\n"
+        f"• Điểm vào lệnh: {int(c.get('entry_score', 55))}/100\n"
+        f"• Điểm đảo/thoát: {int(c.get('exit_score', 35))}/100\n"
+        f"• Số nến thống kê: {int(c.get('history_lookback', 24))}\n"
+        f"• Số nến xu hướng: {int(c.get('trend_lookback', 12))}\n"
+        f"• Số nến phá vùng: {int(c.get('breakout_lookback', 20))}\n\n"
+        "🧠 <b>LOGIC DỰ ĐOÁN</b>\n"
+        "• Không dùng AI, không dùng quy tắc cứng một kiểu.\n"
+        "• Bot chấm điểm từ -100 đến +100 bằng thống kê gần nhất.\n"
+        "• Điểm dương mạnh → dự đoán BUY; điểm âm mạnh → dự đoán SELL.\n"
+        "• Các yếu tố được cộng có trọng số: thân nến, độ dốc xu hướng, tốc độ volume, phá đỉnh/đáy, xu hướng khung lớn.\n"
+        "• Bot còn ước lượng biên độ nến kế tiếp bằng ATR% gần nhất để log lý do dự đoán.\n"
+        "• Không có chương trình nào auto win 100%; file này ưu tiên quản trị rủi ro và đồng bộ vị thế thật Binance.\n\n"
+        "⚖️ <b>TRỌNG SỐ</b>\n"
+        f"• Thân nến: {float(c.get('body_weight', 1.2)):.2f}\n"
+        f"• Xu hướng: {float(c.get('trend_weight', 1.25)):.2f}\n"
+        f"• Volume: {float(c.get('volume_weight', 1.0)):.2f}\n"
+        f"• Phá vùng: {float(c.get('breakout_weight', 1.05)):.2f}\n"
+        f"• Khung lớn: {float(c.get('market_weight', 0.85)):.2f}\n\n"
         "🛡️ <b>TP/SL - QUẢN LÝ RỦI RO</b>\n"
         f"• TP chiến lược: {tp:.1f}% ROI ({'TẮT' if tp <= 0 else 'BẬT'})\n"
         f"• SL chiến lược: {sl:.1f}% ROI ({'TẮT' if sl <= 0 else 'BẬT'})\n"
@@ -754,23 +793,38 @@ def get_strategy_config_text():
         "• Đồng bộ vị thế thật Binance: BẬT, kiểm tra thường xuyên trước TP/SL/đảo chiều.\n"
     )
 
-def _candle_direction(open_price, close_price):
-    """
-    Nến đã đóng luôn phải trả về BUY hoặc SELL.
-    - Close > Open  => BUY
-    - Close < Open  => SELL
-    - Close == Open => vẫn ép về BUY để không bao giờ mất tín hiệu.
 
-    Lý do: chiến lược này bỏ qua doji/độ dày/độ rộng nến, nên không được trả None.
-    """
+def _clamp(value, lo=-1.0, hi=1.0):
+    try:
+        return max(float(lo), min(float(hi), float(value)))
+    except Exception:
+        return 0.0
+
+
+def _safe_avg(values, default=0.0):
+    vals = [float(v) for v in values if v is not None]
+    return sum(vals) / len(vals) if vals else float(default)
+
+
+def _candle_get(c, key, idx, default=0.0):
+    try:
+        return float(c.get(key, default)) if isinstance(c, dict) else float(c[idx])
+    except Exception:
+        return float(default)
+
+
+def _candle_direction(open_price, close_price):
     try:
         o = float(open_price)
         c = float(close_price)
-        if c >= o:
-            return "BUY"
-        return "SELL"
+        return "BUY" if c >= o else "SELL"
     except Exception:
         return "BUY"
+
+
+def _direction_value(open_price, close_price):
+    return 1.0 if _candle_direction(open_price, close_price) == 'BUY' else -1.0
+
 
 def _opposite_side(side):
     if side == "BUY":
@@ -778,6 +832,7 @@ def _opposite_side(side):
     if side == "SELL":
         return "BUY"
     return None
+
 
 def _safe_progress(candle, timeframe_seconds=None):
     timeframe_seconds = timeframe_seconds or _STRATEGY_CONFIG.get('timeframe_seconds', 60.0)
@@ -788,115 +843,6 @@ def _safe_progress(candle, timeframe_seconds=None):
         return max(0.001, min(1.0, elapsed / float(timeframe_seconds)))
     except Exception:
         return 1.0
-
-def _candle_get(c, key, idx, default=0.0):
-    try:
-        return float(c.get(key, default)) if isinstance(c, dict) else float(c[idx])
-    except Exception:
-        return float(default)
-
-def _is_not_sideway_candle(open_price, close_price, high_price, low_price, min_body_ratio=None):
-    """Giữ tương thích tên cũ: True nếu nến đủ thân/range và không bị bẹt."""
-    ok, info = _is_tradeable_candle(open_price, close_price, high_price, low_price, min_body_ratio=min_body_ratio)
-    return ok, float(info.get('body_ratio', 0.0) or 0.0)
-
-
-def _is_tradeable_candle(open_price, close_price, high_price, low_price, min_body_ratio=None):
-    """Lọc nến không chỉ theo doji mà còn theo độ dài thật."""
-    try:
-        cfg = _STRATEGY_CONFIG.get_all()
-        o = float(open_price)
-        c = float(close_price)
-        h = float(high_price)
-        l = float(low_price)
-        if o <= 0:
-            return False, {'reason': 'bad_open'}
-        rng = h - l
-        body = abs(c - o)
-        if rng <= 0:
-            return False, {'reason': 'zero_range'}
-        body_ratio = body / rng
-        range_pct = rng / o * 100.0
-        body_pct = body / o * 100.0
-        min_body_ratio = float(cfg.get('body_ratio_min', 0.25) if min_body_ratio is None else min_body_ratio)
-        min_range_pct = float(cfg.get('min_range_pct', 0.08))
-        min_body_pct = float(cfg.get('min_body_pct', 0.03))
-        if body_ratio < min_body_ratio:
-            return False, {'reason': 'doji_body_ratio', 'body_ratio': body_ratio, 'range_pct': range_pct, 'body_pct': body_pct}
-        if range_pct < min_range_pct:
-            return False, {'reason': 'range_too_short', 'body_ratio': body_ratio, 'range_pct': range_pct, 'body_pct': body_pct}
-        if body_pct < min_body_pct:
-            return False, {'reason': 'body_pct_too_small', 'body_ratio': body_ratio, 'range_pct': range_pct, 'body_pct': body_pct}
-        return True, {'reason': 'ok', 'body_ratio': body_ratio, 'range_pct': range_pct, 'body_pct': body_pct}
-    except Exception as e:
-        return False, {'reason': f'error_{type(e).__name__}'}
-
-
-def _is_flat_zone(candles, current_price=None):
-    """True nếu cụm nến đóng gần nhất quá bẹt dù từng cây không phải doji."""
-    try:
-        cfg = _STRATEGY_CONFIG.get_all()
-        lookback = int(cfg.get('flat_zone_lookback', 5))
-        if lookback <= 1:
-            return False, {'reason': 'disabled'}
-        if not candles or len(candles) < lookback:
-            return False, {'reason': 'not_enough_history', 'have': len(candles or []), 'need': lookback}
-        recent = list(candles)[-lookback:]
-        highs = [_candle_get(c, 'high', 2) for c in recent]
-        lows = [_candle_get(c, 'low', 3) for c in recent]
-        zone_high = max(highs)
-        zone_low = min(lows)
-        ref_price = float(current_price or _candle_get(recent[-1], 'close', 4) or 0)
-        if ref_price <= 0:
-            return False, {'reason': 'bad_ref_price'}
-        box_range_pct = (zone_high - zone_low) / ref_price * 100.0
-        min_box = float(cfg.get('min_box_range_pct', 0.15))
-        if box_range_pct < min_box:
-            return True, {'reason': 'flat_zone', 'box_range_pct': box_range_pct, 'min_box_range_pct': min_box, 'lookback': lookback}
-        return False, {'reason': 'ok', 'box_range_pct': box_range_pct, 'min_box_range_pct': min_box, 'lookback': lookback}
-    except Exception as e:
-        return False, {'reason': f'error_{type(e).__name__}'}
-
-
-def _history_candle_direction(candle):
-    try:
-        o = _candle_get(candle, 'open', 1)
-        c = _candle_get(candle, 'close', 4)
-        return _candle_direction(o, c)
-    except Exception:
-        return None
-
-def _majority_direction(candles):
-    buys = 0
-    sells = 0
-    for c in candles:
-        d = _history_candle_direction(c)
-        if d == 'BUY':
-            buys += 1
-        elif d == 'SELL':
-            sells += 1
-    if buys > sells:
-        return 'BUY'
-    if sells > buys:
-        return 'SELL'
-    return None
-
-def _volume_speed(candle):
-    return max(0.0, _candle_get(candle, 'volume', 5))
-
-def _near_highest(value, values, tolerance):
-    if not values:
-        return False
-    return float(value) >= max(values) * (1.0 - float(tolerance))
-
-def _near_lowest(value, values, tolerance):
-    if not values:
-        return False
-    return float(value) <= min(values) * (1.0 + float(tolerance))
-
-def _current_side_from_prices(open_price, close_price):
-    """Nến hiện tại cũng ép thành BUY/SELL, không trả None."""
-    return _candle_direction(open_price, close_price)
 
 
 def _body_pct_of(open_price, close_price):
@@ -910,72 +856,128 @@ def _body_pct_of(open_price, close_price):
         return 0.0
 
 
-def _binary_bit_from_side(side):
-    return 1 if side == 'BUY' else 0
-
-def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_curr,
-                        prev_candle, market_candle=None, progress=1.0,
-                        mode='entry', recent_1m_history=None, market_history=None, current_is_final=False):
-    """Chiến lược cuối: cộng nhị phân màu nến.
-
-    Dùng đúng 3 nến cùng khung:
-    - nến đã đóng thứ 2 gần nhất
-    - nến đã đóng gần nhất
-    - nến hiện tại
-
-    Màu nến:
-    - xanh = 1
-    - đỏ = 0
-    - open == close ép thành xanh = 1
-
-    Cộng 3 bit theo nhị phân và lấy bit cuối của kết quả:
-    - 110 => 1+1+0 = 10₂, bit cuối 0 => SELL
-    - 111 => 1+1+1 = 11₂, bit cuối 1 => BUY
-    - kết quả bit cuối 1 => BUY
-    - kết quả bit cuối 0 => SELL
-    """
+def _range_pct_of(candle):
     try:
-        cfg = _STRATEGY_CONFIG.get_all()
-        cur_interval = _normalize_interval(cfg.get('current_interval', '1m'))
-        elapsed = max(0.001, float(progress or 0.0) * _interval_seconds(cur_interval))
-        min_elapsed = float(cfg.get('min_elapsed_seconds', 6.0) or 0.0)
-        if elapsed < min_elapsed:
-            return None, 0, f'elapsed_too_early {elapsed:.1f}s < {min_elapsed:.1f}s', False
+        o = _candle_get(candle, 'open', 1)
+        h = _candle_get(candle, 'high', 2)
+        l = _candle_get(candle, 'low', 3)
+        return ((h - l) / o * 100.0) if o > 0 else 0.0
+    except Exception:
+        return 0.0
 
-        history = list(recent_1m_history or market_history or [])
-        if len(history) >= 2:
-            prev2_candle = history[-2]
-            prev1_candle = history[-1]
-        else:
-            # prev_candle chỉ là nến đã đóng gần nhất. Nếu thiếu nến đóng thứ 2 thì chưa đủ 3 nến để cộng.
-            return None, 0, 'missing_two_closed_candles', False
 
-        prev2_open = float(_candle_get(prev2_candle, 'open', 1))
-        prev2_close = float(_candle_get(prev2_candle, 'close', 4))
-        prev1_open = float(_candle_get(prev1_candle, 'open', 1))
-        prev1_close = float(_candle_get(prev1_candle, 'close', 4))
+def _close_price(candle):
+    return _candle_get(candle, 'close', 4)
 
-        prev2_side = _candle_direction(prev2_open, prev2_close)
-        prev1_side = _candle_direction(prev1_open, prev1_close)
-        current_side = _candle_direction(open_curr, current_price)
 
-        b2 = _binary_bit_from_side(prev2_side)
-        b1 = _binary_bit_from_side(prev1_side)
-        bc = _binary_bit_from_side(current_side)
-        bit_pattern = f'{b2}{b1}{bc}'
-        total = b2 + b1 + bc
-        result_bit = total % 2
-        binary_sum = format(total, 'b')
-        signal = 'BUY' if result_bit == 1 else 'SELL'
-        reason = (
-            f'binary_candle_xor_ok | interval={cur_interval} mode={mode} elapsed={elapsed:.1f}s '
-            f'prev2={prev2_side}:{b2} prev1={prev1_side}:{b1} current={current_side}:{bc} '
-            f'pattern={bit_pattern} total={binary_sum}₂({total}) result_bit={result_bit} signal={signal}'
-        )
-        return signal, 1, reason, False
-    except Exception as e:
-        logger.error(f"Lỗi chấm điểm cộng nhị phân màu nến: {e}")
-        return None, 0, 'error', False
+def _open_price(candle):
+    return _candle_get(candle, 'open', 1)
+
+
+def _volume_of(candle):
+    return max(0.0, _candle_get(candle, 'volume', 5))
+
+
+def _linear_slope_score(closes):
+    """Độ dốc tuyến tính chuẩn hóa về [-1,1] bằng nhiễu trung bình."""
+    try:
+        n = len(closes)
+        if n < 3:
+            return 0.0
+        xs = list(range(n))
+        mx = sum(xs) / n
+        my = sum(closes) / n
+        denom = sum((x - mx) ** 2 for x in xs) or 1.0
+        slope = sum((xs[i] - mx) * (closes[i] - my) for i in range(n)) / denom
+        avg_abs_move = _safe_avg([abs(closes[i] - closes[i-1]) for i in range(1, n)], default=0.0)
+        if avg_abs_move <= 0:
+            return 0.0
+        return _clamp(slope / avg_abs_move / 1.8)
+    except Exception:
+        return 0.0
+
+
+def _atr_pct(candles):
+    try:
+        ranges = [_range_pct_of(c) for c in candles if _range_pct_of(c) > 0]
+        return _safe_avg(ranges[-20:], default=0.0)
+    except Exception:
+        return 0.0
+
+
+def _weighted_body_pressure(candles, open_curr, current_price):
+    try:
+        seq = list(candles or [])[-20:]
+        points = []
+        for i, c in enumerate(seq):
+            o = _open_price(c)
+            cl = _close_price(c)
+            body = _body_pct_of(o, cl)
+            recency = 0.55 + (i + 1) / max(len(seq), 1) * 0.45
+            points.append(_direction_value(o, cl) * body * recency)
+        # Nến hiện tại quan trọng hơn vì là dữ liệu realtime.
+        points.append(_direction_value(open_curr, current_price) * _body_pct_of(open_curr, current_price) * 1.35)
+        denom = sum(abs(p) for p in points) or 1.0
+        return _clamp(sum(points) / denom)
+    except Exception:
+        return 0.0
+
+
+def _volume_impulse_score(current_volume, progress, interval_seconds, candles, current_dir):
+    try:
+        elapsed = max(1.0, float(progress or 0.0) * float(interval_seconds or 60.0))
+        curr_speed = float(current_volume or 0.0) / elapsed
+        closed_speeds = []
+        for c in list(candles or [])[-20:]:
+            closed_speeds.append(_volume_of(c) / max(1.0, float(interval_seconds or 60.0)))
+        avg_speed = _safe_avg([v for v in closed_speeds if v > 0], default=0.0)
+        if avg_speed <= 0:
+            return 0.0, curr_speed, avg_speed
+        ratio = curr_speed / avg_speed
+        # ratio 1.0 = trung tính, 2.0 trở lên = lực mạnh.
+        mag = _clamp((ratio - 1.0) / 2.0)
+        return _clamp(current_dir * mag), curr_speed, avg_speed
+    except Exception:
+        return 0.0, 0.0, 0.0
+
+
+def _breakout_score(current_price, candles, lookback):
+    try:
+        recent = list(candles or [])[-max(3, int(lookback)):]
+        if len(recent) < 3:
+            return 0.0, 0.0, 0.0
+        highs = [_candle_get(c, 'high', 2) for c in recent]
+        lows = [_candle_get(c, 'low', 3) for c in recent]
+        hi = max(highs)
+        lo = min(lows)
+        if hi <= lo:
+            return 0.0, hi, lo
+        price = float(current_price)
+        if price >= hi:
+            return 1.0, hi, lo
+        if price <= lo:
+            return -1.0, hi, lo
+        mid = (hi + lo) / 2.0
+        return _clamp((price - mid) / ((hi - lo) / 2.0)), hi, lo
+    except Exception:
+        return 0.0, 0.0, 0.0
+
+
+def _market_bias_score(market_history, market_candle=None):
+    try:
+        hist = list(market_history or [])
+        if not hist and market_candle:
+            hist = [market_candle]
+        closes = [_close_price(c) for c in hist[-12:] if _close_price(c) > 0]
+        slope = _linear_slope_score(closes)
+        recent_dir = 0.0
+        if hist:
+            recent = hist[-1]
+            recent_dir = _direction_value(_open_price(recent), _close_price(recent)) * min(1.0, _body_pct_of(_open_price(recent), _close_price(recent)) / max(_atr_pct(hist[-12:]), 0.001))
+        return _clamp(0.65 * slope + 0.35 * recent_dir)
+    except Exception:
+        return 0.0
+
 
 def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
     return {
@@ -986,34 +988,148 @@ def _kline_to_candle_dict(arr, symbol, interval, is_final=True):
         'update_ts': time.time()
     }
 
+
+def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_curr,
+                        prev_candle, market_candle=None, progress=1.0,
+                        mode='entry', recent_1m_history=None, market_history=None, current_is_final=False):
+    """Dự đoán thống kê đa yếu tố.
+
+    Score > 0 nghiêng BUY, score < 0 nghiêng SELL.
+    Entry dùng entry_score, exit dùng exit_score để đảo nhanh hơn khi đang có vị thế.
+    """
+    try:
+        cfg = _STRATEGY_CONFIG.get_all()
+        cur_interval = _normalize_interval(cfg.get('current_interval', '1m'))
+        interval_sec = _interval_seconds(cur_interval)
+        elapsed = max(0.001, float(progress or 0.0) * interval_sec)
+        min_elapsed = float(cfg.get('min_elapsed_seconds', 6.0) or 0.0)
+        if elapsed < min_elapsed:
+            return None, 0, f'elapsed_too_early {elapsed:.1f}s < {min_elapsed:.1f}s', False
+
+        history = list(recent_1m_history or [])
+        lookback = max(5, int(cfg.get('history_lookback', 24) or 24))
+        trend_lookback = max(3, int(cfg.get('trend_lookback', 12) or 12))
+        breakout_lookback = max(3, int(cfg.get('breakout_lookback', 20) or 20))
+        if len(history) < max(5, min(lookback, 8)):
+            return None, 0, f'not_enough_history {len(history)}/{max(5, min(lookback, 8))}', False
+
+        hist = history[-lookback:]
+        closes = [_close_price(c) for c in hist[-trend_lookback:] if _close_price(c) > 0]
+        current_dir = _direction_value(open_curr, current_price)
+
+        body_pressure = _weighted_body_pressure(hist, open_curr, current_price)
+        trend_score = _linear_slope_score(closes)
+        vol_score, curr_vol_speed, avg_vol_speed = _volume_impulse_score(volume_curr, progress, interval_sec, hist, current_dir)
+        break_score, zone_high, zone_low = _breakout_score(current_price, hist, breakout_lookback)
+        market_score = _market_bias_score(market_history, market_candle)
+
+        # Guard sáng tạo: nếu nến hiện tại đi ngược xu hướng rất mạnh và có volume cao thì cho điểm đảo chiều sớm.
+        reversal_guard = 0.0
+        try:
+            if trend_score * current_dir < -0.35 and abs(vol_score) > 0.25:
+                reversal_guard = current_dir * min(1.0, abs(vol_score) + abs(body_pressure) * 0.5)
+        except Exception:
+            reversal_guard = 0.0
+
+        weights = {
+            'body': max(0.0, float(cfg.get('body_weight', 1.2) or 0.0)),
+            'trend': max(0.0, float(cfg.get('trend_weight', 1.25) or 0.0)),
+            'volume': max(0.0, float(cfg.get('volume_weight', 1.0) or 0.0)),
+            'breakout': max(0.0, float(cfg.get('breakout_weight', 1.05) or 0.0)),
+            'market': max(0.0, float(cfg.get('market_weight', 0.85) or 0.0)),
+            'reversal': max(0.0, float(cfg.get('reversal_guard_weight', 0.65) or 0.0)),
+        }
+        total_w = sum(weights.values()) or 1.0
+        raw = (
+            weights['body'] * body_pressure +
+            weights['trend'] * trend_score +
+            weights['volume'] * vol_score +
+            weights['breakout'] * break_score +
+            weights['market'] * market_score +
+            weights['reversal'] * reversal_guard
+        ) / total_w
+        score_float = _clamp(raw, -1.0, 1.0) * 100.0
+        score_int = int(round(score_float))
+
+        threshold = int(cfg.get('exit_score', 35) if mode == 'exit' else cfg.get('entry_score', 55))
+        signal = None
+        if score_int >= threshold:
+            signal = 'BUY'
+        elif score_int <= -threshold:
+            signal = 'SELL'
+
+        atr = _atr_pct(hist)
+        predicted_move_pct = abs(score_float) / 100.0 * atr
+        predicted_side = 'BUY' if score_float > 0 else 'SELL' if score_float < 0 else 'NEUTRAL'
+        is_spike = abs(vol_score) > 0.65 or abs(break_score) >= 0.95
+        reason = (
+            f'stat_predictor | mode={mode} interval={cur_interval} elapsed={elapsed:.1f}s score={score_int}/100 '
+            f'threshold={threshold} predict={predicted_side} ~{predicted_move_pct:.3f}% '
+            f'body={body_pressure:.2f} trend={trend_score:.2f} vol={vol_score:.2f} '
+            f'break={break_score:.2f} market={market_score:.2f} guard={reversal_guard:.2f} '
+            f'vol_speed={curr_vol_speed:.4f}/{avg_vol_speed:.4f} zone=[{zone_low:.6g},{zone_high:.6g}] signal={signal}'
+        )
+        return signal, abs(score_int), reason, bool(is_spike)
+    except Exception as e:
+        logger.error(f"Lỗi chấm điểm dự đoán thống kê: {e}")
+        return None, 0, 'error', False
+
+
 def _fetch_rest_1m15m_signal_data(symbol):
-    """Tên cũ giữ để tương thích: lấy nến hiện tại + 2 nến đã đóng gần nhất cùng khung."""
+    """Tên cũ giữ tương thích: lấy nến hiện tại + lịch sử đóng của khung dự đoán + lịch sử khung lớn."""
     try:
         cfg = _STRATEGY_CONFIG.get_all()
         current_interval = _normalize_interval(cfg.get('current_interval', '1m'))
+        market_interval = _normalize_interval(cfg.get('market_interval', '15m'))
         symbol = symbol.upper()
         now = time.time()
-        key = (symbol, current_interval, 'binary_candle_color')
+        key = (symbol, current_interval, market_interval, 'statistical_predictor')
         cached = _SIGNAL_DATA_CACHE.get(key)
         if cached and now - cached.get('ts', 0) < _SIGNAL_DATA_CACHE_TTL:
             return cached['data']
 
         url = "https://fapi.binance.com/fapi/v1/klines"
-        curr_data = binance_api_request(url, params={"symbol": symbol, "interval": current_interval, "limit": 5})
-        if not curr_data or len(curr_data) < 3:
+        limit = max(60, int(cfg.get('history_lookback', 24) or 24) + 5, int(cfg.get('breakout_lookback', 20) or 20) + 5)
+        curr_data = binance_api_request(url, params={"symbol": symbol, "interval": current_interval, "limit": min(120, limit)})
+        if not curr_data or len(curr_data) < 8:
             return None, None, None, []
 
         curr = curr_data[-1]
-        current_closed_prev = curr_data[-2]
+        prev_closed = curr_data[-2]
         closed_history = list(curr_data[:-1])
 
-        result = (curr, current_closed_prev, None, closed_history)
+        market_candle = None
+        market_history = []
+        try:
+            market_limit = max(30, int(cfg.get('trend_lookback', 12) or 12) + 5)
+            market_data = binance_api_request(url, params={"symbol": symbol, "interval": market_interval, "limit": min(80, market_limit)})
+            if market_data and len(market_data) >= 3:
+                market_candle = market_data[-2]
+                market_history = list(market_data[:-1])
+                _MARKET_HISTORY_CACHE[(symbol, market_interval)] = {'ts': now, 'data': market_history}
+        except Exception:
+            market_candle = None
+            market_history = []
+
+        result = (curr, prev_closed, market_candle, closed_history)
         _cleanup_signal_data_cache()
-        _SIGNAL_DATA_CACHE[key] = {'ts': now, 'data': result}
+        _SIGNAL_DATA_CACHE[key] = {'ts': now, 'data': result, 'market_history': market_history}
         return result
     except Exception as e:
-        logger.error(f"Lỗi REST lấy dữ liệu cộng nhị phân màu nến {symbol}: {e}")
+        logger.error(f"Lỗi REST lấy dữ liệu dự đoán thống kê {symbol}: {e}")
         return None, None, None, []
+
+
+def _get_cached_market_history(symbol):
+    try:
+        market_interval = _normalize_interval(_STRATEGY_CONFIG.get('market_interval', '15m'))
+        item = _MARKET_HISTORY_CACHE.get((symbol.upper(), market_interval))
+        if item and time.time() - float(item.get('ts', 0) or 0) < 10:
+            return item.get('data') or []
+    except Exception:
+        pass
+    return []
+
 
 def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, recent_1m_history=None):
     try:
@@ -1026,22 +1142,24 @@ def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, r
         signal, score, reason, _ = _score_signal_parts(
             open_curr, close_curr, high_curr, low_curr, volume_curr,
             prev_candle, prev15m_candle, progress=progress, mode='entry', recent_1m_history=recent_1m_history,
-            market_history=recent_1m_history, current_is_final=(progress >= 0.999)
+            market_history=_get_cached_market_history(curr_candle.get('symbol', '') if isinstance(curr_candle, dict) else ''),
+            current_is_final=(progress >= 0.999)
         )
         return signal
     except Exception as e:
-        logger.error(f"Lỗi tính tín hiệu cộng nhị phân màu nến: {e}")
+        logger.error(f"Lỗi tính tín hiệu dự đoán thống kê: {e}")
         return None
 
+
 def get_candle_signal_1h(symbol):
-    """Tên cũ để tương thích: thực tế dùng cộng nhị phân màu nến theo khung đã chọn."""
+    """Tên cũ để tương thích: thực tế dùng chiến lược dự đoán thống kê."""
     try:
-        curr, prev1, prev15, history = _fetch_rest_1m15m_signal_data(symbol)
+        curr, prev1, market, history = _fetch_rest_1m15m_signal_data(symbol)
         if not curr or not prev1:
             return None
-        return compute_signal_from_candles(prev1, curr, prev15, history)
+        return compute_signal_from_candles(prev1, curr, market, history)
     except Exception as e:
-        logger.error(f"Lỗi phân tích tín hiệu cộng nhị phân màu nến {symbol}: {e}")
+        logger.error(f"Lỗi phân tích tín hiệu dự đoán thống kê {symbol}: {e}")
         return None
 
 def get_positions(symbol=None, api_key=None, api_secret=None):
@@ -1814,20 +1932,20 @@ class BaseBot:
             return
 
         prev = candle.get('prev_for_signal') or (self.kline_manager.get_prev_candle(symbol) if self.kline_manager else None)
-        _, _, _, history = _fetch_rest_1m15m_signal_data(symbol)
+        _, _, market_candle, history = _fetch_rest_1m15m_signal_data(symbol)
         if prev is None:
             self.realtime_signal[symbol] = None
             self.last_signal_time[symbol] = time.time()
             self.symbol_data[symbol]['realtime_signal'] = None
             return
 
-        signal = self._compute_signal_from_candle(candle, prev, None, recent_1m_history=history)
+        signal = self._compute_signal_from_candle(candle, prev, market_candle, recent_1m_history=history)
         self.realtime_signal[symbol] = signal
         self.last_signal_time[symbol] = time.time()
         self.symbol_data[symbol]['realtime_signal'] = signal
 
     def _compute_signal_from_candle(self, current_candle, prev_candle, prev15_candle=None, mode='entry', return_details=False, recent_1m_history=None):
-        """Tính tín hiệu nến trước vào ngược theo khung nến đã chọn."""
+        """Tính tín hiệu dự đoán thống kê theo khung nến đã chọn."""
         try:
             open_curr = float(current_candle['open'])
             current_price = float(current_candle.get('close', 0))
@@ -1845,15 +1963,16 @@ class BaseBot:
                 return details if return_details else None
 
             progress = _safe_progress(current_candle, _interval_seconds(_STRATEGY_CONFIG.get('signal_interval', '1m')))
+            market_hist = _get_cached_market_history(symbol or current_candle.get('symbol', ''))
             signal, score, reason, is_spike = _score_signal_parts(
                 open_curr, current_price, float(current_candle['high']), float(current_candle['low']), float(current_candle['volume']),
                 prev_candle, prev15_candle, progress=progress, mode=mode, recent_1m_history=recent_1m_history,
-                current_is_final=bool(current_candle.get('is_final', False)) or progress >= 0.999
+                market_history=market_hist, current_is_final=bool(current_candle.get('is_final', False)) or progress >= 0.999
             )
             details = {'signal': signal, 'score': score, 'reason': reason, 'is_spike': is_spike, 'progress': progress}
             return details if return_details else signal
         except Exception as e:
-            logger.error(f"Lỗi compute signal cộng nhị phân màu nến: {e}")
+            logger.error(f"Lỗi compute signal dự đoán thống kê: {e}")
             details = {'signal': None, 'score': 0, 'reason': 'error', 'is_spike': False}
             return details if return_details else None
 
@@ -1882,23 +2001,9 @@ class BaseBot:
                         self.kline_manager.candle_data[symbol] = rest_candle
                         self.kline_manager.prev_candle_data[symbol] = rest_prev
 
-            # Nếu khung so sánh khác khung hiện tại, prev của websocket không đúng khung.
-            # Lấy nến đã đóng gần nhất của compare_interval qua REST/cache nhưng vẫn giữ candle realtime hiện tại nếu có.
-            cfg = _STRATEGY_CONFIG.get_all()
-            current_interval = _normalize_interval(cfg.get('current_interval', cfg.get('signal_interval', '1m')))
-            compare_interval = _normalize_interval(cfg.get('compare_interval', current_interval))
-            if compare_interval != current_interval:
-                rest_curr_raw, rest_prev_raw, _, _ = _fetch_rest_1m15m_signal_data(symbol)
-                if rest_prev_raw:
-                    prev = rest_prev_raw
-                if not candle and rest_curr_raw:
-                    candle = {
-                        'symbol': symbol.upper(), 'interval': current_interval,
-                        'open': float(rest_curr_raw[1]), 'high': float(rest_curr_raw[2]), 'low': float(rest_curr_raw[3]),
-                        'close': float(rest_curr_raw[4]), 'volume': float(rest_curr_raw[5]),
-                        'is_final': False, 'time': int(rest_curr_raw[0]), 'close_time': int(rest_curr_raw[6]),
-                        'update_ts': time.time()
-                    }
+            market_candle_for_score = None
+            if not candle or not prev:
+                pass
 
             if not candle or not prev:
                 details = {'signal': None, 'score': 0, 'reason': 'missing_candles', 'is_spike': False}
@@ -1908,8 +2013,8 @@ class BaseBot:
                     self.symbol_data[symbol]['realtime_signal'] = None
                 return details if return_details else None
 
-            _, _, _, closed_history = _fetch_rest_1m15m_signal_data(symbol)
-            details = self._compute_signal_from_candle(candle, prev, None, mode=mode, return_details=True, recent_1m_history=closed_history)
+            _, _, market_candle_for_score, closed_history = _fetch_rest_1m15m_signal_data(symbol)
+            details = self._compute_signal_from_candle(candle, prev, market_candle_for_score, mode=mode, return_details=True, recent_1m_history=closed_history)
             signal = details.get('signal')
 
             self.realtime_signal[symbol] = signal
@@ -1920,7 +2025,7 @@ class BaseBot:
 
             return details if return_details else signal
         except Exception as e:
-            logger.error(f"Lỗi lấy tín hiệu realtime mới nhất {symbol}: {e}")
+            logger.error(f"Lỗi lấy tín hiệu realtime dự đoán thống kê {symbol}: {e}")
             details = {'signal': None, 'score': 0, 'reason': 'error', 'is_spike': False}
             return details if return_details else None
 
@@ -1931,7 +2036,7 @@ class BaseBot:
             if not curr or not prev:
                 return None, None, None, []
             interval = _normalize_interval(_STRATEGY_CONFIG.get('current_interval', _STRATEGY_CONFIG.get('signal_interval', '1m')))
-            market_interval = _normalize_interval(_STRATEGY_CONFIG.get('compare_interval', interval))
+            market_interval = _normalize_interval(_STRATEGY_CONFIG.get('market_interval', '15m'))
             def conv(arr, is_final, used_interval):
                 return {
                     'symbol': symbol.upper(), 'interval': used_interval,
@@ -1940,16 +2045,17 @@ class BaseBot:
                     'is_final': is_final, 'time': int(arr[0]), 'close_time': int(arr[6]),
                     'update_ts': time.time()
                 }
-            market_candle = conv(market, False, market_interval) if market else None
+            market_candle = conv(market, True, market_interval) if market else None
+            market_history = _get_cached_market_history(symbol)
             if market_candle is not None:
                 market_candle['history'] = market_history
             return conv(curr, False, interval), conv(prev, True, interval), market_candle, market_history
         except Exception as e:
-            logger.error(f"Lỗi REST fallback lấy nến cộng nhị phân màu nến {symbol}: {e}")
+            logger.error(f"Lỗi REST fallback lấy nến dự đoán thống kê {symbol}: {e}")
             return None, None, None, []
 
     def _debug_realtime_signal(self, symbol, current_side=None):
-        """Log nhanh lý do chưa có tín hiệu để kiểm tra cộng nhị phân màu nến."""
+        """Log nhanh lý do chưa có tín hiệu để kiểm tra dự đoán thống kê."""
         try:
             now = time.time()
             if now - self.last_signal_debug_time.get(symbol, 0) < 5:
@@ -2000,7 +2106,7 @@ class BaseBot:
             return
 
         self.log(
-            f"🧮 {symbol} - Tín hiệu nhị phân ngược vị thế ({signal} vs {current_side}) | "
+            f"🧮 {symbol} - Tín hiệu dự đoán ngược vị thế ({signal} vs {current_side}) | "
             f"score={details.get('score')} | {details.get('reason')} | đóng lệnh và đảo chiều ngay"
         )
         self._close_symbol_position(symbol, reason="Candle opposite (same realtime signal)", reverse_side=signal)
@@ -2815,16 +2921,15 @@ class BotManager:
 
     def send_main_menu(self, chat_id):
         welcome = (
-            "🤖 <b>BOT GIAO DỊCH FUTURES - CỘNG NHỊ PHÂN LẤY BIT CUỐI</b>\n\n"
+            "🤖 <b>BOT GIAO DỊCH FUTURES - DỰ ĐOÁN THỐNG KÊ ĐA YẾU TỐ</b>\n\n"
             "🎯 <b>CƠ CHẾ HOẠT ĐỘNG:</b>\n"
-            "• Chọn khung nến tín hiệu trong mục 🎯 Chiến lược.\n"
-            "• Lấy 2 nến đã đóng gần nhất + nến hiện tại cùng khung.\n"
-            "• Nến xanh = 1, nến đỏ = 0.\n"
-            "• Cộng 3 bit theo nhị phân rồi lấy bit cuối: bit 1 → BUY, bit 0 → SELL.\n"
-            "• Bỏ qua doji/thân nến/biên độ/vùng bẹt/volume khi tạo tín hiệu.\n"
+            "• Chọn khung nến dự đoán và khung xu hướng lớn trong mục 🎯 Chiến lược.\n"
+            "• Bot chấm điểm từ -100 đến +100 bằng: thân nến, độ dốc xu hướng, tốc độ volume, phá vùng high/low và xu hướng khung lớn.\n"
+            "• Điểm dương đủ mạnh → BUY; điểm âm đủ mạnh → SELL.\n"
+            "• Khi đang có vị thế, nếu điểm ngược chiều vượt ngưỡng đảo/thoát thì đóng và đảo ngay.\n"
             "• TP/SL trong mục Chiến lược có thể chỉnh sau khi bot đã vào lệnh.\n"
             "• Khi có vị thế, bot đồng bộ vị thế thật Binance trước TP/SL/đảo chiều.\n\n"
-            "📌 <b>LƯU Ý:</b> Có thể chỉnh tham số từ nút 🎯 Chiến lược."
+            "📌 <b>LƯU Ý:</b> Không có bot auto win 100%; hãy chạy vốn nhỏ để test trước."
         )
         send_telegram(welcome, chat_id=chat_id, reply_markup=create_main_menu(),
                      bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -2994,10 +3099,21 @@ class BotManager:
         current_step = user_state.get('step')
 
         strategy_key_map = {
-            '✏️ Khung nến tín hiệu': ('current_interval', 'Khung nến dùng cho 2 nến đã đóng gần nhất và nến hiện tại. Ví dụ: 1m, 3m, 5m, 15m, 1h.'),
-            '✏️ Khung nến hiện tại': ('current_interval', 'Tên cũ: khung nến tín hiệu. Ví dụ: 1m, 3m, 5m, 15m, 1h.'),
-            '✏️ Signal timeframe': ('current_interval', 'Tên cũ: khung nến tín hiệu.'),
+            '✏️ Khung nến dự đoán': ('current_interval', 'Khung nến realtime dùng để dự đoán. Ví dụ: 1m, 3m, 5m, 15m, 1h.'),
+            '✏️ Khung nến tín hiệu': ('current_interval', 'Tên cũ: khung nến dự đoán. Ví dụ: 1m, 3m, 5m, 15m, 1h.'),
+            '✏️ Khung nến hiện tại': ('current_interval', 'Tên cũ: khung nến dự đoán.'),
+            '✏️ Khung xu hướng lớn': ('market_interval', 'Khung lớn để lấy bias xu hướng. Ví dụ: 15m, 30m, 1h, 4h.'),
             '✏️ Thời gian tối thiểu': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét tín hiệu. Ví dụ 6, 10, 15.'),
+            '✏️ Điểm vào lệnh': ('entry_score', 'Điểm dự đoán tối thiểu để mở lệnh. Cao hơn = ít lệnh hơn nhưng lọc chặt hơn. Ví dụ 45, 55, 70.'),
+            '✏️ Điểm đảo/thoát': ('exit_score', 'Điểm ngược chiều tối thiểu để đóng/đảo vị thế. Ví dụ 30, 35, 45.'),
+            '✏️ Số nến thống kê': ('history_lookback', 'Số nến đóng gần nhất dùng cho thống kê. Ví dụ 12, 24, 40.'),
+            '✏️ Số nến xu hướng': ('trend_lookback', 'Số nến dùng để tính độ dốc xu hướng. Ví dụ 8, 12, 20.'),
+            '✏️ Số nến phá vùng': ('breakout_lookback', 'Số nến dùng để xác định vùng high/low phá đỉnh đáy. Ví dụ 10, 20, 40.'),
+            '✏️ Trọng số thân nến': ('body_weight', 'Trọng số lực thân nến. Có thể nhập 0 để tắt yếu tố này.'),
+            '✏️ Trọng số xu hướng': ('trend_weight', 'Trọng số độ dốc xu hướng. Có thể nhập 0 để tắt yếu tố này.'),
+            '✏️ Trọng số volume': ('volume_weight', 'Trọng số tốc độ volume realtime. Có thể nhập 0 để tắt yếu tố này.'),
+            '✏️ Trọng số phá vùng': ('breakout_weight', 'Trọng số phá high/low. Có thể nhập 0 để tắt yếu tố này.'),
+            '✏️ Trọng số khung lớn': ('market_weight', 'Trọng số xu hướng khung lớn. Có thể nhập 0 để tắt yếu tố này.'),
             '✏️ TP chiến lược': ('strategy_tp_roi', 'TP theo ROI đã nhân đòn bẩy. Có thể chỉnh sau khi bot đã vào lệnh. Nhập 0 để tắt. Ví dụ 50, 100, 150.'),
             '✏️ SL chiến lược': ('strategy_sl_roi', 'SL theo ROI đã nhân đòn bẩy. Có thể chỉnh sau khi bot đã vào lệnh. Nhập 0 để tắt. Ví dụ 50, 100, 150.'),
             '✏️ Cắt lỗ khẩn cấp': ('emergency_stop_roi', 'ROI âm bao nhiêu % thì đóng ngay dù SL đang tắt. 0 là tắt. Ví dụ 80, 120.'),
@@ -3007,8 +3123,11 @@ class BotManager:
             '✏️ ROI bắt đầu bảo vệ': ('profit_protect_start_roi', 'ROI tối thiểu để bắt đầu bảo vệ lợi nhuận. Ví dụ 10, 20, 30.'),
             '✏️ ROI tụt từ đỉnh để đóng': ('profit_protect_pullback_roi', 'Khi ROI tụt khỏi đỉnh bao nhiêu % thì đóng. Ví dụ 5, 8, 10.'),
             # Alias tiếng Anh cũ để tương thích nếu Telegram còn nút cũ trong lịch sử chat
-            '✏️ Current timeframe': ('current_interval', 'Khung nến tín hiệu.'),
+            '✏️ Current timeframe': ('current_interval', 'Khung nến dự đoán.'),
+            '✏️ Market timeframe': ('market_interval', 'Khung xu hướng lớn.'),
             '✏️ Min elapsed seconds': ('min_elapsed_seconds', 'Số giây tối thiểu của nến hiện tại trước khi xét tín hiệu.'),
+            '✏️ Entry score': ('entry_score', 'Điểm dự đoán tối thiểu để mở lệnh.'),
+            '✏️ Exit score': ('exit_score', 'Điểm ngược chiều tối thiểu để đóng/đảo vị thế.'),
             '✏️ Emergency stop ROI': ('emergency_stop_roi', 'ROI âm bao nhiêu % thì đóng ngay dù SL đang tắt. 0 là tắt.'),
             '✏️ Low volume filter': ('low_volume_filter_enabled', '1 = bật lọc coin volume 24h thấp; 0 = tắt.'),
             '✏️ Min 24h volume': ('min_24h_volume', 'Volume 24h tối thiểu của coin để bot tự động chọn.'),
@@ -3133,14 +3252,14 @@ class BotManager:
                     _STRATEGY_CONFIG.update(**{key: val})
                 else:
                     val = float(text)
-                    if key in ('entry_score', 'exit_score', 'breakout_lookback', 'max_reverse_count', 'flat_zone_lookback'):
+                    if key in ('entry_score', 'exit_score', 'history_lookback', 'trend_lookback', 'breakout_lookback', 'max_reverse_count', 'flat_zone_lookback'):
                         val = int(val)
                         if val < 0 or val > 50:
                             raise ValueError
                     elif key == 'max_reverse_balance_percent':
                         if not (0 < val <= 100):
                             raise ValueError
-                    elif key in ('strategy_tp_roi', 'strategy_sl_roi', 'emergency_stop_roi', 'profit_protect_enabled', 'low_volume_filter_enabled'):
+                    elif key in ('strategy_tp_roi', 'strategy_sl_roi', 'emergency_stop_roi', 'profit_protect_enabled', 'low_volume_filter_enabled', 'body_weight', 'trend_weight', 'volume_weight', 'breakout_weight', 'market_weight', 'reversal_guard_weight'):
                         if val < 0:
                             raise ValueError
                     elif val <= 0:
