@@ -706,7 +706,7 @@ class StrategyConfig:
     - hướng = màu nến hiện tại
 
     Không dùng doji, râu nến, điểm, taker, trend, spread, volume 24h an toàn.
-    Thoát lệnh chỉ bằng TP / SL / bảo vệ tụt đỉnh. Cooldown chỉ dùng sau lệnh thua.
+    Thoát lệnh bằng TP / SL / bảo vệ tụt đỉnh hoặc đóng + đảo ngay khi xuất hiện tín hiệu ngược hợp lệ. Cooldown chỉ dùng sau lệnh thua.
     """
     DEFAULTS = {
         'current_interval': '1m',
@@ -721,7 +721,7 @@ class StrategyConfig:
         'profit_protect_enabled': 1.0,
         'profit_protect_start_roi': 14.0,
         'profit_protect_pullback_roi': 6.0,
-        'max_reverse_count': 0,
+        'max_reverse_count': 999,
         'max_hold_seconds': 0,
         'low_volume_filter_enabled': 0.0,
         'min_24h_volume': 0.0,
@@ -842,7 +842,8 @@ def get_strategy_config_text():
         f"• Số coin biến động để quét: {int(c.get('scan_top_coin_limit', 80) or 80)}.\n"
         f"• Số coin chấm tín hiệu: {int(c.get('max_signal_eval_coins', 50) or 50)}.\n"
         f"• Đòn bẩy yêu cầu: {int(c.get('min_allowed_leverage', 50) or 50)}x.\n"
-        f"• Cooldown sau lệnh thua: {int(c.get('coin_cooldown_after_loss_sec', 180) or 180)}s.\n\n"
+        f"• Cooldown sau lệnh thua: {int(c.get('coin_cooldown_after_loss_sec', 180) or 180)}s.\n"
+        f"• Đảo chiều khi tín hiệu ngược: BẬT | giới hạn đảo: {int(c.get('max_reverse_count', 999) or 999)} lần.\n\n"
         "🛡️ <b>TP/SL - QUẢN LÝ LỆNH</b>\n"
         f"• TP chiến lược: {tp:.1f}% ROI ({'TẮT' if tp <= 0 else 'BẬT'})\n"
         f"• SL chiến lược: {sl:.1f}% ROI ({'TẮT' if sl <= 0 else 'BẬT'})\n"
@@ -1925,7 +1926,7 @@ class BaseBot:
         strategy_sl = float(_STRATEGY_CONFIG.get('strategy_sl_roi', 0.0) or 0.0)
         tp_sl_info = f" | TP chiến lược: {strategy_tp}%" if strategy_tp > 0 else (f" | TP bot: {self.tp}%" if self.tp else " | TP: Tắt")
         tp_sl_info += f" | SL chiến lược: {strategy_sl}%" if strategy_sl > 0 else (f" | SL bot: {self.sl}%" if self.sl else " | SL: Tắt")
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: Real Force Candle | vào theo lực mua/bán thật{tp_sl_info}")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: Volume/Range đảo khi ngược | vào theo lực mua/bán thật{tp_sl_info}")
 
     def _run(self):
         last_coin_search_log = 0
@@ -2212,9 +2213,34 @@ class BaseBot:
             logger.error(f"Lỗi REST fallback lấy nến Real Force Candle {symbol}: {e}")
             return None, None, None, []
     def _check_realtime_exit(self, symbol):
-        # Bản tối giản không đóng/đảo bằng tín hiệu ngược.
-        # Vị thế chỉ được đóng bởi TP, SL hoặc bảo vệ lợi nhuận tụt từ đỉnh trong _check_symbol_tp_sl().
-        return
+        """Đóng và đảo chiều ngay khi tín hiệu realtime đi ngược vị thế hiện tại.
+
+        Đây vẫn là logic tối giản: dùng chính tín hiệu volume + biên độ hiện tại so với
+        nến đã đóng gần nhất. Nếu bot đang BUY mà tín hiệu mới là SELL thì SELL đó
+        được coi là tín hiệu hợp lệ để đóng BUY và mở SELL ngay. Ngược lại tương tự.
+        """
+        try:
+            if symbol not in self.symbol_data:
+                return
+            data = self.symbol_data[symbol]
+            if not data.get('position_open'):
+                return
+
+            current_side = data.get('side')
+            details = self._get_fresh_realtime_signal(symbol, mode='entry', return_details=True)
+            signal = details.get('signal') if isinstance(details, dict) else None
+            if not signal or signal == current_side:
+                return
+
+            reason = details.get('reason', '') if isinstance(details, dict) else ''
+            score = float(details.get('score', 0.0) or 0.0) if isinstance(details, dict) else 0.0
+            self.log(
+                f"🔁 {symbol} - Tín hiệu ngược hợp lệ: đang {current_side}, mới {signal} | "
+                f"strength={score:.1f} | đóng và đảo ngay | {reason[:180]}"
+            )
+            self._close_symbol_position(symbol, reason=f"Candle opposite {signal}", reverse_side=signal)
+        except Exception as e:
+            logger.error(f"Lỗi kiểm tra đảo chiều realtime {symbol}: {e}")
 
     def _calc_roi_pnl_for_symbol(self, symbol, pos=None, price=None):
         """Tính ROI/PnL hiện tại theo vị thế thật Binance nếu có.
@@ -2402,13 +2428,14 @@ class BaseBot:
                     self._record_closed_trade_stats(symbol, roi=close_roi, pnl=close_pnl)
                     self._reset_symbol_position(symbol)
 
-                    if "Candle opposite" in reason:
+                    if reverse_side or "Candle opposite" in reason:
                         reverse_side = reverse_side or ("SELL" if side == "BUY" else "BUY")
                         self._pending_reverse = False
                         self._reverse_symbol = None
                         self._reverse_side = None
                         self.log(f"🔄 Đảo chiều ngay {symbol} sang {reverse_side}")
-                        if prev_reverse_count >= int(_STRATEGY_CONFIG.get('max_reverse_count', 2)):
+                        max_rev = int(_STRATEGY_CONFIG.get('max_reverse_count', 999) or 999)
+                        if max_rev > 0 and prev_reverse_count >= max_rev:
                             self.log(f"⛔ {symbol} đã đảo {prev_reverse_count} lần liên tiếp, dừng coin để tránh sideway")
                             self.stop_symbol(symbol, failed=True)
                             return True
