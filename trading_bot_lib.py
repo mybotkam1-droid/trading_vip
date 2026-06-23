@@ -267,23 +267,19 @@ def create_sl_keyboard():
     }
 
 def create_strategy_config_keyboard():
-    """Bàn phím chiến lược tối giản: chỉ dùng lực đẩy hiện tại theo %."""
+    """Bàn phím chiến lược cực gọn: coin biến động + volume/range realtime."""
     return {
         "keyboard": [
             [{"text": "📊 Xem tham số chiến lược"}],
             [{"text": "✏️ Khung nến tín hiệu"}],
-            [{"text": "✏️ Lực MUA để SELL %"}, {"text": "✏️ Lực BÁN để BUY %"}],
-            [{"text": "✏️ Lực thoát %"}, {"text": "✏️ Lực đảo %"}],
-            [{"text": "✏️ Chênh lực tối thiểu %"}],
+            [{"text": "✏️ Số coin biến động để quét"}, {"text": "✏️ Số coin chấm tín hiệu"}],
+            [{"text": "✏️ Đòn bẩy yêu cầu"}],
+            [{"text": "✏️ Hệ số volume"}, {"text": "✏️ Hệ số biên độ nến"}],
+            [{"text": "✏️ Dùng volume USDT"}],
             [{"text": "✏️ TP chiến lược"}, {"text": "✏️ SL chiến lược"}],
-            [{"text": "✏️ Cắt lỗ khẩn cấp"}],
             [{"text": "✏️ Bảo vệ lợi nhuận"}, {"text": "✏️ ROI bắt đầu bảo vệ"}],
             [{"text": "✏️ ROI tụt từ đỉnh để đóng"}],
-            [{"text": "✏️ Lọc coin volume thấp"}, {"text": "✏️ Volume 24h tối thiểu"}],
-            [{"text": "✏️ Số coin quét tối đa"}, {"text": "✏️ Số coin chấm tín hiệu"}],
-            [{"text": "✏️ Giá coin tối thiểu"}, {"text": "✏️ Spread tối đa"}],
-            [{"text": "✏️ Trade 24h tối thiểu"}, {"text": "✏️ Đòn bẩy yêu cầu"}],
-            [{"text": "✏️ Giữ lệnh tối đa"}, {"text": "✏️ Cooldown sau thua"}],
+            [{"text": "✏️ Cooldown sau thua"}],
             [{"text": "🔄 Reset chiến lược mặc định"}],
             [{"text": "🔙 Quay lại menu chính"}],
         ],
@@ -292,21 +288,15 @@ def create_strategy_config_keyboard():
     }
 
 def create_strategy_value_keyboard():
-    """Bàn phím nhập giá trị tham số chiến lược - toàn bộ tiếng Việt."""
+    """Bàn phím nhập giá trị tham số chiến lược cực gọn."""
     return {
         "keyboard": [
             [{"text": "1m"}, {"text": "3m"}, {"text": "5m"}, {"text": "15m"}],
-            [{"text": "30m"}, {"text": "1h"}, {"text": "2h"}, {"text": "4h"}],
-            [{"text": "42"}, {"text": "48"}, {"text": "58"}, {"text": "68"}, {"text": "90"}],
-            [{"text": "0.03"}, {"text": "0.20"}, {"text": "0.30"}, {"text": "0.50"}, {"text": "0.60"}],
-            [{"text": "0.2"}, {"text": "0.25"}, {"text": "0.35"}, {"text": "0.5"}],
-            [{"text": "0.52"}, {"text": "0.56"}, {"text": "0.60"}, {"text": "0.68"}, {"text": "0.76"}],
-            [{"text": "0.01"}, {"text": "0.04"}, {"text": "0.32"}, {"text": "0.68"}, {"text": "0.92"}],
+            [{"text": "20"}, {"text": "50"}, {"text": "80"}, {"text": "120"}],
             [{"text": "1.0"}, {"text": "1.1"}, {"text": "1.2"}, {"text": "1.5"}, {"text": "2.0"}],
-            [{"text": "8000"}, {"text": "15000"}, {"text": "80000"}, {"text": "100000"}, {"text": "100000000"}],
-            [{"text": "14"}, {"text": "18"}, {"text": "22"}, {"text": "38"}, {"text": "90"}],
-            [{"text": "50"}, {"text": "80"}, {"text": "180"}, {"text": "900"}, {"text": "80000"}],
-            [{"text": "0"}, {"text": "1"}, {"text": "5"}, {"text": "10"}, {"text": "20"}, {"text": "30"}],
+            [{"text": "0"}, {"text": "1"}, {"text": "50"}, {"text": "75"}, {"text": "100"}],
+            [{"text": "12"}, {"text": "18"}, {"text": "28"}, {"text": "38"}, {"text": "60"}],
+            [{"text": "180"}, {"text": "300"}, {"text": "600"}, {"text": "900"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
         "resize_keyboard": True,
@@ -708,51 +698,56 @@ def _interval_seconds(interval=None):
     return float(_BINANCE_INTERVAL_SECONDS.get(_normalize_interval(interval), 60.0))
 
 class StrategyConfig:
-    """Cấu hình chiến lược Current Force Percent ĐẢO LỰC.
+    """Cấu hình chiến lược tối giản: chọn coin biến động cao, vào theo nến hiện tại.
 
-    Bỏ các logic phức tạp: không thời gian, không body/range, không điểm, không so nến trước.
-    Tín hiệu chỉ dựa trên lực mua/bán chủ động hiện tại nhưng vào ngược phe đang chủ động:
-    - BUY force % cao  -> SELL
-    - SELL force % cao -> BUY
+    Tín hiệu chỉ còn:
+    - current_volume >= previous_closed_volume * volume_factor
+    - current_range >= previous_closed_range * range_factor
+    - hướng = màu nến hiện tại
+
+    Không dùng doji, râu nến, điểm, taker, trend, spread, volume 24h an toàn.
+    Thoát lệnh chỉ bằng TP / SL / bảo vệ tụt đỉnh. Cooldown chỉ dùng sau lệnh thua.
     """
     DEFAULTS = {
         'current_interval': '1m',
         'signal_interval': '1m',
         'timeframe_seconds': 60.0,
-        'entry_buy_force_pct': 57.0,
-        'entry_sell_force_pct': 57.0,
-        'exit_force_pct': 53.0,
-        'reverse_force_pct': 64.0,
-        'min_force_gap_pct': 4.0,
-        'contrarian_force_enabled': 1.0,
+        'volume_factor': 1.10,
+        'range_factor': 1.10,
+        'use_quote_volume': 1.0,
         'strategy_tp_roi': 28.0,
         'strategy_sl_roi': 12.0,
-        'emergency_stop_roi': 20.0,
+        'emergency_stop_roi': 0.0,
         'profit_protect_enabled': 1.0,
         'profit_protect_start_roi': 14.0,
         'profit_protect_pullback_roi': 6.0,
-        'max_reverse_count': 2,
-        'max_hold_seconds': 60,
-        'low_volume_filter_enabled': 1.0,
-        'min_24h_volume': 50000000.0,
+        'max_reverse_count': 0,
+        'max_hold_seconds': 0,
+        'low_volume_filter_enabled': 0.0,
+        'min_24h_volume': 0.0,
         'scan_top_coin_limit': 80,
-        'max_signal_eval_coins': 40,
-        'min_coin_price': 0.010000,
+        'max_signal_eval_coins': 50,
+        'min_coin_price': 0.0,
         'max_coin_price': 0.0,
-        'min_24h_trade_count': 50000,
-        'max_spread_pct': 0.060,
+        'min_24h_trade_count': 0,
+        'max_spread_pct': 999.0,
         'target_leverage': 50,
         'min_allowed_leverage': 50,
-        'max_abs_24h_change_pct': 40.0,
+        'max_abs_24h_change_pct': 0.0,
         'min_abs_24h_change_pct': 0.0,
         'coin_cooldown_after_loss_sec': 180,
-        'max_consecutive_losses_before_pause': 3,
-        'pause_after_loss_streak_sec': 900,
+        'max_consecutive_losses_before_pause': 999,
+        'pause_after_loss_streak_sec': 0,
         'force_rest_signal_enabled': 0.0,
         # Alias cũ để không lỗi với phần code chung/Telegram cũ, nhưng không dùng làm tín hiệu.
+        'entry_buy_force_pct': 0.0,
+        'entry_sell_force_pct': 0.0,
+        'exit_force_pct': 0.0,
+        'reverse_force_pct': 0.0,
+        'min_force_gap_pct': 0.0,
         'entry_score_threshold': 0.0,
         'exit_score_threshold': 0.0,
-        'reverse_score_threshold': 0.0,
+        'reverse_score_threshold': 999999.0,
         'min_score_gap': 0.0,
         'entry_min_body_pct': 0.0,
         'entry_min_range_pct': 0.0,
@@ -764,9 +759,9 @@ class StrategyConfig:
         'exit_min_body_ratio': 0.0,
         'exit_min_quote_volume': 0.0,
         'exit_min_trades': 0,
-        'exit_taker_ratio_min': 0.53,
-        'buy_taker_ratio_min': 0.57,
-        'sell_taker_ratio_min': 0.57,
+        'exit_taker_ratio_min': 0.0,
+        'buy_taker_ratio_min': 0.0,
+        'sell_taker_ratio_min': 0.0,
         'compare_interval': '1m',
         'market_interval': '1m',
         'extreme_interval': '1m',
@@ -785,9 +780,6 @@ class StrategyConfig:
         self._config['compare_interval'] = self._config.get('current_interval', '1m')
         self._config['market_interval'] = self._config.get('current_interval', '1m')
         self._config['extreme_interval'] = self._config.get('current_interval', '1m')
-        self._config['buy_taker_ratio_min'] = float(self._config.get('entry_buy_force_pct', 57.0) or 57.0) / 100.0
-        self._config['sell_taker_ratio_min'] = float(self._config.get('entry_sell_force_pct', 57.0) or 57.0) / 100.0
-        self._config['exit_taker_ratio_min'] = float(self._config.get('exit_force_pct', 53.0) or 53.0) / 100.0
 
     def get(self, key, default=None):
         with self._lock:
@@ -832,38 +824,30 @@ def get_strategy_config_text():
     cur = _normalize_interval(c.get('current_interval', '1m'))
     tp = float(c.get('strategy_tp_roi', 28.0) or 0.0)
     sl = float(c.get('strategy_sl_roi', 12.0) or 0.0)
+    use_qv = float(c.get('use_quote_volume', 1.0) or 0.0) >= 0.5
     return (
-        "🎯 <b>CHIẾN LƯỢC CURRENT FORCE % - ĐẢO LỰC</b>\n\n"
+        "🎯 <b>CHIẾN LƯỢC BIẾN ĐỘNG + VOLUME/RANGE TỐI GIẢN</b>\n\n"
         f"• Khung nến tín hiệu: {cur} ({_interval_seconds(cur):.0f}s)\n"
-        "• Không dùng thời gian tối thiểu.\n"
-        "• Không dùng body/range/râu nến.\n"
-        "• Không chấm điểm mơ hồ.\n"
-        "• Không so nến trước, không so khung lớn.\n"
-        "• Chỉ xét <b>lực mua/bán chủ động hiện tại</b> trong cây nến đang chạy.\n"
-        "• Logic ĐẢO LỰC: phe nào mua/bán quá mạnh thì bot vào ngược phe đó.\n\n"
-        "💪 <b>CÔNG THỨC LỰC ĐẨY</b>\n"
-        "• BUY force % = taker buy quote / quote volume × 100.\n"
-        "• SELL force % = taker sell quote / quote volume × 100.\n"
-        "• Taker sell quote = quote volume - taker buy quote.\n\n"
-        "🚀 <b>ĐIỀU KIỆN VÀO LỆNH ĐẢO LỰC</b>\n"
-        f"• SELL nếu lực MUA hiện tại ≥ {float(c.get('entry_buy_force_pct', 57.0)):.1f}% và hơn lực bán ít nhất {float(c.get('min_force_gap_pct', 4.0)):.1f}%.\n"
-        f"• BUY nếu lực BÁN hiện tại ≥ {float(c.get('entry_sell_force_pct', 57.0)):.1f}% và hơn lực mua ít nhất {float(c.get('min_force_gap_pct', 4.0)):.1f}%.\n\n"
-        "🚪 <b>THOÁT / ĐẢO CHIỀU</b>\n"
-        f"• Đóng lệnh nếu lực ngược hiện tại ≥ {float(c.get('exit_force_pct', 53.0)):.1f}%.\n"
-        f"• Chỉ đảo chiều nếu lực ngược hiện tại ≥ {float(c.get('reverse_force_pct', 64.0)):.1f}%.\n"
-        "• Đóng lệnh dễ hơn vào lệnh, đảo chiều khó hơn đóng lệnh.\n\n"
-        "🛡️ <b>TP/SL - QUẢN LÝ RỦI RO</b>\n"
+        "• Chọn coin theo biến động giá 24h cao nhất.\n"
+        "• Chỉ lọc coin đang bị cooldown/đang active/blacklist và đòn bẩy yêu cầu.\n"
+        "• Không dùng doji, râu nến, taker, trend, EMA/RSI, chấm điểm mơ hồ.\n"
+        "• Không đóng/đảo bằng tín hiệu ngược; chỉ TP, SL và bảo vệ tụt đỉnh.\n\n"
+        "⚡ <b>TÍN HIỆU VÀO LỆNH</b>\n"
+        f"• Volume hiện tại ≥ volume nến đóng gần nhất × {float(c.get('volume_factor', 1.10)):.2f}.\n"
+        f"• Biên độ nến hiện tại ≥ biên độ nến đóng gần nhất × {float(c.get('range_factor', 1.10)):.2f}.\n"
+        f"• Loại volume: {'quoteVolume USDT' if use_qv else 'base volume coin'}.\n"
+        "• Nến hiện tại xanh → BUY. Nến hiện tại đỏ → SELL. Open = Close thì ép BUY.\n\n"
+        "🪙 <b>CHỌN COIN</b>\n"
+        f"• Sắp xếp theo |priceChangePercent 24h| từ cao xuống thấp.\n"
+        f"• Số coin biến động để quét: {int(c.get('scan_top_coin_limit', 80) or 80)}.\n"
+        f"• Số coin chấm tín hiệu: {int(c.get('max_signal_eval_coins', 50) or 50)}.\n"
+        f"• Đòn bẩy yêu cầu: {int(c.get('min_allowed_leverage', 50) or 50)}x.\n"
+        f"• Cooldown sau lệnh thua: {int(c.get('coin_cooldown_after_loss_sec', 180) or 180)}s.\n\n"
+        "🛡️ <b>TP/SL - QUẢN LÝ LỆNH</b>\n"
         f"• TP chiến lược: {tp:.1f}% ROI ({'TẮT' if tp <= 0 else 'BẬT'})\n"
         f"• SL chiến lược: {sl:.1f}% ROI ({'TẮT' if sl <= 0 else 'BẬT'})\n"
-        f"• Cắt lỗ khẩn cấp: {float(c.get('emergency_stop_roi', 20.0)):.1f}% ROI (0 = tắt)\n"
         f"• Bảo vệ lợi nhuận: {'BẬT' if float(c.get('profit_protect_enabled', 1.0)) >= 0.5 else 'TẮT'} | bắt đầu {float(c.get('profit_protect_start_roi', 14.0)):.1f}% | tụt {float(c.get('profit_protect_pullback_roi', 6.0)):.1f}% thì đóng\n"
-        f"• Giữ lệnh tối đa: {int(c.get('max_hold_seconds', 60) or 60)}s | Cooldown sau thua: {int(c.get('coin_cooldown_after_loss_sec', 180) or 180)}s\n\n"
-        "🪙 <b>LỌC COIN</b>\n"
-        f"• Lọc coin volume thấp: {'BẬT' if float(c.get('low_volume_filter_enabled', 1.0)) >= 0.5 else 'TẮT'} | quoteVolume 24h tối thiểu: {float(c.get('min_24h_volume', 0)):,.0f}\n"
-        f"• Số coin quét tối đa mỗi lượt: {int(c.get('scan_top_coin_limit', 80) or 80)} | số coin chấm tín hiệu: {int(c.get('max_signal_eval_coins', 40) or 40)}\n"
-        f"• Giá coin tối thiểu: {float(c.get('min_coin_price', 0.01)):.6f} | Spread tối đa: {float(c.get('max_spread_pct', 0.06)):.3f}%\n"
-        f"• Trade 24h tối thiểu: {int(c.get('min_24h_trade_count', 50000) or 50000):,} | Đòn bẩy yêu cầu: {int(c.get('min_allowed_leverage', 50) or 50)}x\n"
-        "• Đồng bộ vị thế thật Binance: BẬT, kiểm tra trước TP/SL/thoát/đảo chiều.\n"
+        "• Đồng bộ vị thế thật Binance: BẬT trước khi xét TP/SL.\n"
     )
 
 def _clamp(value, lo=-1.0, hi=1.0):
@@ -973,8 +957,99 @@ def _wick_metrics(open_price, close_price, high_price, low_price):
         return 0.0, 0.0, 0.5, 0.0
 
 
+def _candle_open(c):
+    try:
+        return float(c.get('open') if isinstance(c, dict) else c[1])
+    except Exception:
+        return 0.0
+
+
+def _candle_high(c):
+    try:
+        return float(c.get('high') if isinstance(c, dict) else c[2])
+    except Exception:
+        return 0.0
+
+
+def _candle_low(c):
+    try:
+        return float(c.get('low') if isinstance(c, dict) else c[3])
+    except Exception:
+        return 0.0
+
+
+def _candle_close(c):
+    try:
+        return float(c.get('close') if isinstance(c, dict) else c[4])
+    except Exception:
+        return 0.0
+
+
+def _base_volume_of(c):
+    try:
+        if isinstance(c, dict):
+            return float(c.get('volume', c.get('v', 0.0)) or 0.0)
+        return float(c[5])
+    except Exception:
+        return 0.0
+
+
+def _selected_volume_of(c):
+    try:
+        if float(_STRATEGY_CONFIG.get('use_quote_volume', 1.0) or 0.0) >= 0.5:
+            return float(_quote_volume_of(c) or 0.0)
+        return float(_base_volume_of(c) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _range_pct_of(c):
+    try:
+        o = _candle_open(c); h = _candle_high(c); l = _candle_low(c)
+        if o <= 0:
+            return 0.0
+        return max(0.0, h - l) / o * 100.0
+    except Exception:
+        return 0.0
+
+
+def _volatility_volume_range_signal(current_candle, prev_closed_candle=None, mode='entry'):
+    """Tín hiệu tối giản: current volume + current range vượt nến đóng gần nhất, đi theo màu nến hiện tại."""
+    try:
+        if not current_candle or not prev_closed_candle:
+            return None, 0.0, 'missing_current_or_previous_candle', False
+        cfg = _STRATEGY_CONFIG.get_all()
+        vol_factor = max(0.0, float(cfg.get('volume_factor', 1.10) or 0.0))
+        range_factor = max(0.0, float(cfg.get('range_factor', 1.10) or 0.0))
+        curr_vol = float(_selected_volume_of(current_candle) or 0.0)
+        prev_vol = float(_selected_volume_of(prev_closed_candle) or 0.0)
+        curr_range = float(_range_pct_of(current_candle) or 0.0)
+        prev_range = float(_range_pct_of(prev_closed_candle) or 0.0)
+
+        vol_need = prev_vol * vol_factor
+        range_need = prev_range * range_factor
+        vol_ok = curr_vol >= vol_need if prev_vol > 0 else curr_vol > 0
+        range_ok = curr_range >= range_need if prev_range > 0 else curr_range > 0
+        o = _candle_open(current_candle)
+        c = _candle_close(current_candle)
+        signal = 'BUY' if c >= o else 'SELL'
+
+        vol_ratio = curr_vol / prev_vol if prev_vol > 0 else (999.0 if curr_vol > 0 else 0.0)
+        range_ratio = curr_range / prev_range if prev_range > 0 else (999.0 if curr_range > 0 else 0.0)
+        strength = max(0.0, min(vol_ratio / max(vol_factor, 1e-9), range_ratio / max(range_factor, 1e-9)) * 100.0)
+        reason = (
+            f"{signal} | vol={curr_vol:.0f}/{prev_vol:.0f} ratio={vol_ratio:.2f} need={vol_factor:.2f} | "
+            f"range={curr_range:.3f}%/{prev_range:.3f}% ratio={range_ratio:.2f} need={range_factor:.2f}"
+        )
+        if vol_ok and range_ok:
+            return signal, strength, reason, False
+        return None, strength, 'SIDEWAY ' + reason, False
+    except Exception as e:
+        return None, 0.0, f'signal_error:{e}', False
+
+
 def _force_pct_from_candle(candle):
-    """Trả về (buy_force_pct, sell_force_pct, quote_volume, taker_buy_quote, taker_sell_quote)."""
+    # Giữ lại tên cũ để các phần thống kê không lỗi, không dùng cho tín hiệu.
     try:
         q = max(0.0, float(_quote_volume_of(candle) or 0.0))
         tbq = max(0.0, float(_taker_buy_quote_of(candle) or 0.0))
@@ -989,41 +1064,13 @@ def _force_pct_from_candle(candle):
 
 
 def _current_force_signal_from_candle(candle, mode='entry'):
-    """Logic tín hiệu tối giản ĐẢO LỰC: chỉ dùng lực mua/bán chủ động hiện tại theo %, rồi vào ngược phe đang quá mạnh."""
-    try:
-        if not candle:
-            return None, 0.0, 'missing_current_candle', False
-        buy_pct, sell_pct, q, tbq, tsq = _force_pct_from_candle(candle)
-        cfg = _STRATEGY_CONFIG.get_all()
-        gap_need = float(cfg.get('min_force_gap_pct', 4.0) or 0.0)
-        gap = abs(buy_pct - sell_pct)
-        if mode == 'entry':
-            buy_need = float(cfg.get('entry_buy_force_pct', 57.0) or 57.0)
-            sell_need = float(cfg.get('entry_sell_force_pct', 57.0) or 57.0)
-            # ĐẢO LỰC:
-            # - Mua chủ động quá mạnh: bot SELL để bán vào lực mua đang đẩy giá.
-            # - Bán chủ động quá mạnh: bot BUY để mua vào lực bán đang đạp giá.
-            if buy_pct >= buy_need and (buy_pct - sell_pct) >= gap_need:
-                return 'SELL', buy_pct, f'CONTRA_SELL_FROM_BUY_FORCE buy={buy_pct:.1f}% >= {buy_need:.1f}% | sell={sell_pct:.1f}% gap={buy_pct-sell_pct:.1f}% quote={q:.0f} takerBuy={tbq:.0f}', buy_pct >= float(cfg.get('reverse_force_pct', 64.0) or 64.0)
-            if sell_pct >= sell_need and (sell_pct - buy_pct) >= gap_need:
-                return 'BUY', sell_pct, f'CONTRA_BUY_FROM_SELL_FORCE sell={sell_pct:.1f}% >= {sell_need:.1f}% | buy={buy_pct:.1f}% gap={sell_pct-buy_pct:.1f}% quote={q:.0f} takerSell={tsq:.0f}', sell_pct >= float(cfg.get('reverse_force_pct', 64.0) or 64.0)
-            return None, max(buy_pct, sell_pct), f'SIDEWAY lực chưa đủ | buy={buy_pct:.1f}% sell={sell_pct:.1f}% gap={gap:.1f}% needGap={gap_need:.1f}% quote={q:.0f}', False
-        threshold = float(cfg.get('exit_force_pct', 53.0) or 53.0)
-        # Exit cũng dùng hướng ĐẢO LỰC để kiểm soát vị thế:
-        # BUY force cao -> tín hiệu SELL; SELL force cao -> tín hiệu BUY.
-        if buy_pct >= threshold and buy_pct >= sell_pct:
-            return 'SELL', buy_pct, f'EXIT_CONTRA_SELL_FROM_BUY_FORCE buy={buy_pct:.1f}% >= {threshold:.1f}% | sell={sell_pct:.1f}% quote={q:.0f}', buy_pct >= float(cfg.get('reverse_force_pct', 64.0) or 64.0)
-        if sell_pct >= threshold and sell_pct >= buy_pct:
-            return 'BUY', sell_pct, f'EXIT_CONTRA_BUY_FROM_SELL_FORCE sell={sell_pct:.1f}% >= {threshold:.1f}% | buy={buy_pct:.1f}% quote={q:.0f}', sell_pct >= float(cfg.get('reverse_force_pct', 64.0) or 64.0)
-        return None, max(buy_pct, sell_pct), f'EXIT_SIDEWAY lực ngược chưa đủ | buy={buy_pct:.1f}% sell={sell_pct:.1f}% threshold={threshold:.1f}% quote={q:.0f}', False
-    except Exception as e:
-        return None, 0.0, f'force_error:{e}', False
+    # Không còn dùng lực taker đơn lẻ; hàm này chỉ giữ tương thích và cần prev candle nên trả None.
+    return None, 0.0, 'need_previous_closed_candle', False
 
 
 def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_curr,
                         prev_candle, market_candle=None, progress=1.0,
                         current_candle=None, mode='entry'):
-    """Giữ tên hàm cũ để các phần khác không lỗi, nhưng logic đã tối giản hoàn toàn."""
     candle = current_candle or {
         'open': open_curr,
         'close': current_price,
@@ -1031,12 +1078,12 @@ def _score_signal_parts(open_curr, current_price, high_curr, low_curr, volume_cu
         'low': low_curr,
         'volume': volume_curr,
     }
-    return _current_force_signal_from_candle(candle, mode=mode)
+    return _volatility_volume_range_signal(candle, prev_candle or {}, mode=mode)
 
 
 def _closed_force_current_confirm_signal(current_candle, closed_candle=None, mode='entry'):
-    """Tên cũ, logic mới: bỏ nến đóng, chỉ xét lực nến hiện tại."""
-    return _current_force_signal_from_candle(current_candle, mode=mode)
+    # Tên cũ giữ tương thích; logic mới dùng volume + biên độ nến hiện tại so với nến đóng gần nhất.
+    return _volatility_volume_range_signal(current_candle, closed_candle or {}, mode=mode)
 
 
 def _fetch_rest_1m15m_signal_data(symbol):
@@ -1088,7 +1135,7 @@ def get_candle_signal_1h(symbol):
         return None
 
 def get_candle_signal_details(symbol):
-    """Lấy tín hiệu: nến đóng gần nhất đủ lực + nến hiện tại xác nhận cùng hướng và mạnh hơn."""
+    """Lấy tín hiệu tối giản: volume + biên độ hiện tại vượt nến đóng gần nhất."""
     try:
         curr, prev1, market, history = _fetch_rest_1m15m_signal_data(symbol)
         if not curr or not prev1:
@@ -1097,13 +1144,14 @@ def get_candle_signal_details(symbol):
         return {
             'symbol': symbol, 'signal': signal, 'score': float(score or 0.0),
             'reason': reason, 'is_spike': bool(is_spike), 'source': 'REST',
-            'quote_volume': _quote_volume_of(curr),
-            'taker_buy_quote': _taker_buy_quote_of(curr),
-            'taker_sell_quote': max(0.0, _quote_volume_of(curr) - _taker_buy_quote_of(curr)),
+            'current_volume': _selected_volume_of(curr),
+            'previous_volume': _selected_volume_of(prev1),
+            'current_range_pct': _range_pct_of(curr),
+            'previous_range_pct': _range_pct_of(prev1),
             'num_trades': _num_trades_of(curr),
         }
     except Exception as e:
-        logger.error(f"Lỗi lấy chi tiết tín hiệu Current Force Percent {symbol}: {e}")
+        logger.error(f"Lỗi lấy chi tiết tín hiệu Volume/Range {symbol}: {e}")
         logger.error(traceback.format_exc())
         return {'symbol': symbol, 'signal': None, 'score': 0.0, 'reason': f'error: {e}', 'is_spike': False, 'source': 'REST'}
 
@@ -1413,99 +1461,40 @@ class SmartCoinFinder:
             return 999.0
 
     @staticmethod
-    def _base_coin_score(coin, spread_pct, max_leverage):
-        qv = float(coin.get('quote_volume', coin.get('volume', 0.0)) or 0.0)
-        trades = int(float(coin.get('trade_count', 0) or 0))
-        chg = abs(float(coin.get('price_change_percent', 0.0) or 0.0))
-        price = float(coin.get('price', coin.get('last_price', 0.0)) or 0.0)
-
-        liquidity_score = 0.0
-        if qv >= 500_000_000: liquidity_score = 20
-        elif qv >= 200_000_000: liquidity_score = 15
-        elif qv >= 100_000_000: liquidity_score = 10
-
-        trade_score = 0.0
-        if trades >= 300_000: trade_score = 20
-        elif trades >= 150_000: trade_score = 15
-        elif trades >= 80_000: trade_score = 10
-
-        if 8 <= chg <= 18: vol_score = 20
-        elif 3 <= chg < 8: vol_score = 12
-        elif 18 < chg <= 25: vol_score = 8
-        else: vol_score = 0
-
-        if spread_pct <= 0.02: spread_score = 20
-        elif spread_pct <= 0.04: spread_score = 10
-        else: spread_score = -100
-
-        lev_score = 20 if max_leverage >= int(_STRATEGY_CONFIG.get('min_allowed_leverage', 50) or 50) else -100
-
-        price_penalty = 0
-        if price < 0.03:
-            price_penalty = 8
-
-        return max(0.0, liquidity_score * 0.25 + trade_score * 0.20 + vol_score * 0.20 + spread_score * 0.25 + lev_score * 0.10 - price_penalty)
+    def _base_coin_score(coin, spread_pct=0.0, max_leverage=0):
+        # Điểm nền cực đơn giản: biến động giá 24h càng lớn càng ưu tiên.
+        try:
+            return abs(float(coin.get('price_change_percent', 0.0) or 0.0))
+        except Exception:
+            return 0.0
 
     def _coin_passes_filters(self, coin, book_map, lev_map, excluded_coins):
+        """Chỉ lọc thứ bắt buộc: active/blacklist/cooldown và đòn bẩy yêu cầu."""
         try:
             symbol = str(coin.get('symbol', '')).upper()
             if not symbol or symbol in _SYMBOL_BLACKLIST:
-                return False, 'blacklist', 0.0, 999.0, 0
+                return False, 'blacklist', 0.0, 0.0, 0
             if excluded_coins and symbol in excluded_coins:
-                return False, 'active_excluded', 0.0, 999.0, 0
+                return False, 'active_excluded', 0.0, 0.0, 0
             if self._bot_manager and self._bot_manager.bot_coordinator.is_temp_blacklisted(symbol):
-                return False, 'temp_blacklist', 0.0, 999.0, 0
+                return False, 'temp_blacklist', 0.0, 0.0, 0
             if self._bot_manager and self._bot_manager.coin_manager.is_coin_active(symbol):
-                return False, 'coin_active', 0.0, 999.0, 0
+                return False, 'coin_active', 0.0, 0.0, 0
             if time.time() < float(_COIN_LOSS_COOLDOWN.get(symbol, 0) or 0):
-                return False, 'cooldown_after_loss', 0.0, 999.0, 0
-
-            qv = float(coin.get('quote_volume', coin.get('volume', 0.0)) or 0.0)
-            if float(_STRATEGY_CONFIG.get('low_volume_filter_enabled', 1.0)) >= 0.5:
-                min_qv = float(_STRATEGY_CONFIG.get('min_24h_volume', 100_000_000) or 0)
-                if qv < min_qv:
-                    return False, 'quote_volume_low', 0.0, 999.0, 0
-
-            trades = int(float(coin.get('trade_count', 0) or 0))
-            min_trades = int(float(_STRATEGY_CONFIG.get('min_24h_trade_count', 80_000) or 0))
-            if trades < min_trades:
-                return False, 'trade_count_low', 0.0, 999.0, 0
-
-            price = float(coin.get('price', coin.get('last_price', 0.0)) or 0.0)
-            min_price = float(_STRATEGY_CONFIG.get('min_coin_price', 0.01) or 0.0)
-            max_price = float(_STRATEGY_CONFIG.get('max_coin_price', 0.0) or 0.0)
-            if price <= 0 or price < min_price:
-                return False, 'price_too_small', 0.0, 999.0, 0
-            if max_price > 0 and price > max_price:
-                return False, 'price_too_big', 0.0, 999.0, 0
-
-            abs_chg = abs(float(coin.get('price_change_percent', 0.0) or 0.0))
-            min_chg = float(_STRATEGY_CONFIG.get('min_abs_24h_change_pct', 3.0) or 0.0)
-            max_chg = float(_STRATEGY_CONFIG.get('max_abs_24h_change_pct', 25.0) or 0.0)
-            if abs_chg < min_chg:
-                return False, 'too_quiet', 0.0, 999.0, 0
-            if max_chg > 0 and abs_chg > max_chg:
-                return False, 'pumped_too_far', 0.0, 999.0, 0
-
-            book = book_map.get(symbol) or {}
-            spread = self._spread_pct_from_book(book)
-            max_spread = float(_STRATEGY_CONFIG.get('max_spread_pct', 0.04) or 0.04)
-            if spread > max_spread:
-                return False, 'spread_too_wide', 0.0, spread, 0
+                return False, 'cooldown_after_loss', 0.0, 0.0, 0
 
             lev_info = lev_map.get(symbol) or {}
             max_lev = int(float(lev_info.get('max_leverage', coin.get('max_leverage', 0)) or 0))
             if max_lev <= 0:
-                # Fallback: nhiều bản cache cũ không có bracket. Cho qua, set_leverage sẽ kiểm tra lại khi mở.
                 max_lev = int(float(coin.get('max_leverage', 50) or 50))
             min_lev = int(float(_STRATEGY_CONFIG.get('min_allowed_leverage', self.bot_leverage) or self.bot_leverage))
             if max_lev < min_lev:
-                return False, 'leverage_low', 0.0, spread, max_lev
+                return False, 'leverage_low', 0.0, 0.0, max_lev
 
-            base_score = self._base_coin_score(coin, spread, max_lev)
-            return True, 'ok', base_score, spread, max_lev
+            base_score = self._base_coin_score(coin, 0.0, max_lev)
+            return True, 'ok', base_score, 0.0, max_lev
         except Exception as e:
-            return False, f'filter_error:{e}', 0.0, 999.0, 0
+            return False, f'filter_error:{e}', 0.0, 0.0, 0
 
     def find_best_coin_with_balance(self, excluded_coins=None):
         try:
@@ -1520,22 +1509,21 @@ class SmartCoinFinder:
                 return None
 
             cfg = _STRATEGY_CONFIG.get_all()
-            limit = max(20, int(float(cfg.get('scan_top_coin_limit', 80) or 80)))
-            eval_limit = max(5, int(float(cfg.get('max_signal_eval_coins', 40) or 40)))
-            book_map = self._get_book_ticker_map()
+            limit = max(5, int(float(cfg.get('scan_top_coin_limit', 80) or 80)))
+            eval_limit = max(1, int(float(cfg.get('max_signal_eval_coins', 50) or 50)))
             lev_map = self._get_leverage_bracket_map()
 
-            # Sắp xếp theo quoteVolume trước để không quét 600 coin.
-            coins = sorted(coins, key=lambda c: float(c.get('quote_volume', c.get('volume', 0.0)) or 0.0), reverse=True)[:limit]
+            # Sắp xếp đúng yêu cầu: coin biến động giá 24h cao nhất trước.
+            coins = sorted(coins, key=lambda c: abs(float(c.get('price_change_percent', 0.0) or 0.0)), reverse=True)[:limit]
 
             candidates = []
             for coin in coins:
-                ok, reason, base_score, spread, max_lev = self._coin_passes_filters(coin, book_map, lev_map, excluded_coins or set())
+                ok, reason, base_score, spread, max_lev = self._coin_passes_filters(coin, {}, lev_map, excluded_coins or set())
                 if not ok:
                     continue
                 c = coin.copy()
                 c['_base_score'] = base_score
-                c['_spread_pct'] = spread
+                c['_spread_pct'] = 0.0
                 c['_max_leverage'] = max_lev
                 candidates.append(c)
 
@@ -1554,8 +1542,7 @@ class SmartCoinFinder:
                     continue
                 sig_score = float(details.get('score', 0.0) or 0.0)
                 base = float(coin.get('_base_score', 0.0) or 0.0)
-                # final: tín hiệu là quan trọng nhất, nhưng coin nền xấu vẫn bị tụt hạng.
-                final_score = sig_score * 0.70 + base * 1.50
+                final_score = base * 10.0 + sig_score
                 item = (final_score, symbol, signal, sig_score, base, coin, details)
                 if best is None or item[0] > best[0]:
                     best = item
@@ -1563,24 +1550,21 @@ class SmartCoinFinder:
             if best:
                 final_score, symbol, signal, sig_score, base, coin, details = best
                 logger.info(
-                    f"✅ Chọn coin {symbol} {signal} | final={final_score:.1f} signal={sig_score:.1f} base={base:.1f} "
-                    f"| qVol24h={float(coin.get('quote_volume', 0.0)):.0f} trades24h={int(coin.get('trade_count', 0) or 0)} "
-                    f"| spread={float(coin.get('_spread_pct', 0.0)):.4f}% lev={int(coin.get('_max_leverage', 0) or 0)}x | {details.get('reason', '')[:220]}"
+                    f"✅ Chọn coin biến động {symbol} {signal} | final={final_score:.1f} biến động24h={base:.2f}% "
+                    f"lev={int(coin.get('_max_leverage', 0) or 0)}x | {details.get('reason', '')[:220]}"
                 )
                 return symbol
 
-            # Log rất ít để Railway không spam nhưng vẫn biết bot đang lọc.
             if now - self._last_best_log > 60:
                 top = candidates[0]
                 logger.info(
-                    f"ℹ️ Chưa có tín hiệu. Top nền: {top['symbol']} base={float(top.get('_base_score', 0.0)):.1f} "
-                    f"qVol={float(top.get('quote_volume', 0.0)):.0f} spread={float(top.get('_spread_pct', 0.0)):.4f}%"
+                    f"ℹ️ Chưa có tín hiệu. Top biến động: {top['symbol']} | biến động24h={float(top.get('_base_score', 0.0)):.2f}%"
                 )
                 self._last_best_log = now
             return None
 
         except Exception as e:
-            logger.error(f"❌ Lỗi tìm coin theo momentum score: {str(e)}")
+            logger.error(f"❌ Lỗi tìm coin biến động: {str(e)}")
             logger.error(traceback.format_exc())
             return None
 
@@ -2228,46 +2212,8 @@ class BaseBot:
             logger.error(f"Lỗi REST fallback lấy nến Real Force Candle {symbol}: {e}")
             return None, None, None, []
     def _check_realtime_exit(self, symbol):
-        """
-        Đóng/đảo chiều ngay khi xuất hiện tín hiệu ngược đủ chuẩn.
-        Tín hiệu đóng và mở dùng chung một bộ chấm điểm để tránh trường hợp mở nhạy nhưng đóng quá trễ.
-        """
-        if symbol not in self.symbol_data:
-            return
-
-        data = self.symbol_data[symbol]
-        if not data['position_open']:
-            return
-
-        current_side = data.get('side')
-        if current_side not in ('BUY', 'SELL'):
-            return
-
-        details = self._get_fresh_realtime_signal(symbol, mode='exit', return_details=True)
-        signal = details.get('signal')
-
-
-        if signal is None or signal == current_side:
-            # Không đóng nếu chưa có tín hiệu ngược; lưu lý do ngắn để thống kê nội bộ.
-            if symbol in self.symbol_data:
-                self.symbol_data[symbol]['last_exit_check_reason'] = details.get('reason')
-            return
-
-        score = float(details.get('score', 0) or 0)
-        reverse_threshold = float(_STRATEGY_CONFIG.get('reverse_force_pct', 64.0) or 64.0)
-        can_reverse = bool(details.get('is_spike')) or score >= reverse_threshold
-        if can_reverse:
-            self.log(
-                f"🧮 {symbol} - Lực ngược RẤT MẠNH ({signal} vs {current_side}) | "
-                f"score={score:.1f} | {details.get('reason')} | đóng và đảo chiều"
-            )
-            self._close_symbol_position(symbol, reason="Candle opposite strong real force", reverse_side=signal)
-        else:
-            self.log(
-                f"🚪 {symbol} - Lực ngược đủ để THOÁT ({signal} vs {current_side}) | "
-                f"score={score:.1f} | {details.get('reason')} | chỉ đóng lệnh, không đảo"
-            )
-            self._close_symbol_position(symbol, reason="Exit opposite weak real force")
+        # Bản tối giản không đóng/đảo bằng tín hiệu ngược.
+        # Vị thế chỉ được đóng bởi TP, SL hoặc bảo vệ lợi nhuận tụt từ đỉnh trong _check_symbol_tp_sl().
         return
 
     def _calc_roi_pnl_for_symbol(self, symbol, pos=None, price=None):
@@ -2612,7 +2558,7 @@ class BaseBot:
                                f"💰 Đòn bẩy: {self.lev}x\n")
                     if self.tp: message += f"🎯 TP: {self.tp}% | "
                     if self.sl: message += f"🛡️ SL: {self.sl}%"
-                    message += f"\n🔄 Thoát: Tín hiệu ngược đủ chuẩn thì đảo ngay; có hút lực từ đỉnh hoặc TP/SL"
+                    message += f"\n🔄 Thoát: chỉ TP/SL hoặc bảo vệ lợi nhuận tụt từ đỉnh"
                     self.log(message)
                     return True
                 else:
@@ -3281,28 +3227,18 @@ class BotManager:
         current_step = user_state.get('step')
 
         strategy_key_map = {
-            '✏️ Khung nến tín hiệu': ('current_interval', 'Khung nến lấy lực taker hiện tại. Ví dụ: 1m, 3m, 5m, 15m.'),
-            '✏️ Khung nến hiện tại': ('current_interval', 'Tên cũ: khung nến tín hiệu.'),
-            '✏️ Lực MUA để SELL %': ('entry_buy_force_pct', 'Đảo lực: SELL nếu taker buy quote / quote volume x100 vượt mức này. Ví dụ 55, 57, 60.'),
-            '✏️ Lực BÁN để BUY %': ('entry_sell_force_pct', 'Đảo lực: BUY nếu taker sell quote / quote volume x100 vượt mức này. Ví dụ 55, 57, 60.'),
-            '✏️ Lực thoát %': ('exit_force_pct', 'Đang có vị thế, nếu lực ngược vượt mức này thì đóng lệnh. Nên thấp hơn lực vào. Ví dụ 52, 53, 55.'),
-            '✏️ Lực đảo %': ('reverse_force_pct', 'Nếu lực ngược cực mạnh vượt mức này thì đóng và đảo chiều. Ví dụ 62, 64, 66.'),
-            '✏️ Chênh lực tối thiểu %': ('min_force_gap_pct', 'Lực phe thắng phải hơn phe thua ít nhất bao nhiêu %. Ví dụ 2, 4, 6.'),
+            '✏️ Khung nến tín hiệu': ('current_interval', 'Khung nến lấy nến hiện tại và nến đóng gần nhất. Ví dụ: 1m, 3m, 5m, 15m.'),
+            '✏️ Số coin biến động để quét': ('scan_top_coin_limit', 'Lấy top N coin có |priceChangePercent 24h| cao nhất để quét.'),
+            '✏️ Số coin chấm tín hiệu': ('max_signal_eval_coins', 'Trong top biến động, chấm tín hiệu tối đa bao nhiêu coin để giảm request.'),
+            '✏️ Đòn bẩy yêu cầu': ('min_allowed_leverage', 'Chỉ đánh coin có bracket hỗ trợ ít nhất mức đòn bẩy này.'),
+            '✏️ Hệ số volume': ('volume_factor', 'Volume hiện tại phải >= volume nến đóng gần nhất nhân hệ số này. Ví dụ 1.1, 1.2, 1.5.'),
+            '✏️ Hệ số biên độ nến': ('range_factor', 'Biên độ hiện tại phải >= biên độ nến đóng gần nhất nhân hệ số này. Ví dụ 1.1, 1.2, 1.5.'),
+            '✏️ Dùng volume USDT': ('use_quote_volume', '1 = dùng quoteVolume USDT, 0 = dùng base volume coin.'),
             '✏️ TP chiến lược': ('strategy_tp_roi', 'TP ROI dùng realtime, có thể chỉnh sau khi đã vào lệnh. 0 = tắt.'),
             '✏️ SL chiến lược': ('strategy_sl_roi', 'SL ROI dùng realtime, có thể chỉnh sau khi đã vào lệnh. 0 = tắt.'),
-            '✏️ Cắt lỗ khẩn cấp': ('emergency_stop_roi', 'ROI âm tối đa để đóng khẩn cấp. 0 = tắt.'),
-            '✏️ Bảo vệ lợi nhuận': ('profit_protect_enabled', '1 = bật bảo vệ lợi nhuận, 0 = tắt.'),
+            '✏️ Bảo vệ lợi nhuận': ('profit_protect_enabled', '1 = bật bảo vệ lợi nhuận tụt từ đỉnh, 0 = tắt.'),
             '✏️ ROI bắt đầu bảo vệ': ('profit_protect_start_roi', 'ROI từng đạt từ mức này trở lên thì bắt đầu bảo vệ lợi nhuận.'),
             '✏️ ROI tụt từ đỉnh để đóng': ('profit_protect_pullback_roi', 'Khi ROI tụt từ đỉnh xuống mức này thì đóng.'),
-            '✏️ Lọc coin volume thấp': ('low_volume_filter_enabled', '1 = bật lọc coin volume 24h thấp, 0 = tắt.'),
-            '✏️ Volume 24h tối thiểu': ('min_24h_volume', 'QuoteVolume 24h tối thiểu để bot chọn coin.'),
-            '✏️ Số coin quét tối đa': ('scan_top_coin_limit', 'Giới hạn số coin quoteVolume cao nhất được xét nền mỗi lượt.'),
-            '✏️ Số coin chấm tín hiệu': ('max_signal_eval_coins', 'Trong top coin sau lọc, chỉ chấm tín hiệu sâu tối đa bao nhiêu coin để giảm request.'),
-            '✏️ Giá coin tối thiểu': ('min_coin_price', 'Bỏ coin giá quá nhỏ để giảm lỗi tick/precision/trượt giá.'),
-            '✏️ Spread tối đa': ('max_spread_pct', 'Spread bid/ask tối đa theo %. Coin rác nên để thấp.'),
-            '✏️ Trade 24h tối thiểu': ('min_24h_trade_count', 'Số giao dịch 24h tối thiểu để tránh coin volume ảo.'),
-            '✏️ Đòn bẩy yêu cầu': ('min_allowed_leverage', 'Chỉ đánh coin có bracket hỗ trợ ít nhất mức này.'),
-            '✏️ Giữ lệnh tối đa': ('max_hold_seconds', 'Nếu giữ quá số giây này mà chưa TP thì đóng.'),
             '✏️ Cooldown sau thua': ('coin_cooldown_after_loss_sec', 'Sau khi coin thua, tạm nghỉ coin đó bao nhiêu giây.'),
         }
 
@@ -3607,7 +3543,7 @@ class BotManager:
             if success:
                 success_msg = (
                     f"✅ <b>ĐÃ TẠO BOT MARKET REGIME + SPEED THÀNH CÔNG</b>\n\n"
-                    f"🤖 Chiến lược: nến trước vào ngược + exit riêng + emergency SL\n"
+                    f"🤖 Chiến lược: biến động 24h + volume/range realtime tối giản\n"
                     f"🔧 Chế độ: {bot_mode}\n"
                     f"🔢 Số bot: {bot_count}\n"
                     f"💰 Đòn bẩy: {leverage}x\n"
