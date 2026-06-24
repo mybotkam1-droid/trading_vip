@@ -711,13 +711,14 @@ class StrategyConfig:
     Không dùng doji, râu nến, điểm, taker, trend, spread, volume 24h an toàn.
     Thoát lệnh bằng TP / SL / bảo vệ tụt đỉnh hoặc đóng + đảo ngay khi xuất hiện tín hiệu ngược hợp lệ. Cooldown chỉ dùng sau lệnh thua.
     """
-DEFAULTS = {
+    DEFAULTS = {
         'current_interval': '15m',
         'signal_interval': '15m',
         'timeframe_seconds': 900.0,
         'volume_factor': 1.10,
         'range_factor': 1.10,
-        'min_prev_range_pct': 0.05,
+        'min_prev_range_pct': 0.08,
+        'block_same_candle_reverse': 1.0,
         'use_quote_volume': 1.0,
         'strategy_tp_roi': 0.0,
         'strategy_sl_roi': 0.0,
@@ -725,7 +726,7 @@ DEFAULTS = {
         'profit_protect_enabled': 1.0,
         'profit_protect_start_roi': 50.0,
         'profit_protect_pullback_roi': 30.0,
-        'max_reverse_count': 5,               # <<< MỚI: số lần đảo chiều tối đa liên tiếp
+        'max_reverse_count': 999,
         'max_hold_seconds': 0,
         'low_volume_filter_enabled': 0.0,
         'min_24h_volume': 0.0,
@@ -739,11 +740,11 @@ DEFAULTS = {
         'min_allowed_leverage': 50,
         'max_abs_24h_change_pct': 0.0,
         'min_abs_24h_change_pct': 0.0,
-        'coin_cooldown_after_loss_sec': 900,
+        'coin_cooldown_after_loss_sec': 180,
         'max_consecutive_losses_before_pause': 999,
         'pause_after_loss_streak_sec': 0,
         'force_rest_signal_enabled': 0.0,
-        # Các tham số cũ giữ lại để tương thích
+        # Alias cũ để không lỗi với phần code chung/Telegram cũ, nhưng không dùng làm tín hiệu.
         'entry_buy_force_pct': 0.0,
         'entry_sell_force_pct': 0.0,
         'exit_force_pct': 0.0,
