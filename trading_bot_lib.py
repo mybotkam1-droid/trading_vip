@@ -267,20 +267,13 @@ def create_sl_keyboard():
     }
 
 def create_strategy_config_keyboard():
-    """Bàn phím chiến lược cực gọn: coin biến động + volume/range realtime."""
+    """Bàn phím chiến lược random: chỉ giữ TP/SL và bảo vệ lợi nhuận."""
     return {
         "keyboard": [
             [{"text": "📊 Xem tham số chiến lược"}],
-            [{"text": "✏️ Khung nến tín hiệu"}],
-            [{"text": "✏️ Số coin biến động để quét"}, {"text": "✏️ Số coin chấm tín hiệu"}],
-            [{"text": "✏️ Đòn bẩy yêu cầu"}],
-            [{"text": "✏️ Hệ số volume"}, {"text": "✏️ Hệ số biên độ nến"}],
-            [{"text": "✏️ Biên độ nến trước tối thiểu"}, {"text": "✏️ Chặn đảo cùng nến"}],
-            [{"text": "✏️ Dùng volume USDT"}],
             [{"text": "✏️ TP chiến lược"}, {"text": "✏️ SL chiến lược"}],
             [{"text": "✏️ Bảo vệ lợi nhuận"}, {"text": "✏️ ROI bắt đầu bảo vệ"}],
             [{"text": "✏️ ROI tụt từ đỉnh để đóng"}],
-            [{"text": "✏️ Cooldown sau thua"}],
             [{"text": "🔄 Reset chiến lược mặc định"}],
             [{"text": "🔙 Quay lại menu chính"}],
         ],
@@ -289,16 +282,12 @@ def create_strategy_config_keyboard():
     }
 
 def create_strategy_value_keyboard():
-    """Bàn phím nhập giá trị tham số chiến lược cực gọn."""
+    """Bàn phím nhập giá trị cho TP/SL và bảo vệ lợi nhuận."""
     return {
         "keyboard": [
-            [{"text": "1m"}, {"text": "3m"}, {"text": "5m"}, {"text": "15m"}],
-            [{"text": "20"}, {"text": "50"}, {"text": "80"}, {"text": "120"}],
-            [{"text": "1.0"}, {"text": "1.1"}, {"text": "1.2"}, {"text": "1.5"}, {"text": "2.0"}],
-            [{"text": "0.05"}, {"text": "0.08"}, {"text": "0.12"}, {"text": "0.20"}],
-            [{"text": "0"}, {"text": "1"}, {"text": "50"}, {"text": "75"}, {"text": "100"}],
-            [{"text": "12"}, {"text": "18"}, {"text": "28"}, {"text": "38"}, {"text": "60"}],
-            [{"text": "180"}, {"text": "300"}, {"text": "600"}, {"text": "900"}],
+            [{"text": "0"}, {"text": "1"}, {"text": "5"}, {"text": "10"}],
+            [{"text": "20"}, {"text": "30"}, {"text": "50"}, {"text": "100"}],
+            [{"text": "150"}, {"text": "200"}, {"text": "300"}, {"text": "500"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
         "resize_keyboard": True,
@@ -700,16 +689,14 @@ def _interval_seconds(interval=None):
     return float(_BINANCE_INTERVAL_SECONDS.get(_normalize_interval(interval), 60.0))
 
 class StrategyConfig:
-    """Cấu hình chiến lược tối giản: chọn coin biến động cao, vào theo nến hiện tại.
+    """Cấu hình chiến lược RANDOM.
 
-    Tín hiệu chỉ còn:
-    - current_volume >= previous_closed_volume * volume_factor
-    - previous_closed_range phải lớn hơn ngưỡng nến bẹt
-    - current_range >= previous_closed_range * range_factor
-    - hướng = màu nến hiện tại
+    Không dùng volume, biên độ, doji, trend, EMA/RSI, taker hay bất kỳ điều kiện tín hiệu nào.
+    Hướng vào lệnh được chọn ngẫu nhiên BUY/SELL. Khi đã có vị thế, bot chỉ quản lý thoát
+    bằng TP, SL, emergency SL và bảo vệ lợi nhuận tụt từ đỉnh.
 
-    Không dùng doji, râu nến, điểm, taker, trend, spread, volume 24h an toàn.
-    Thoát lệnh bằng TP / SL / bảo vệ tụt đỉnh hoặc đóng + đảo ngay khi xuất hiện tín hiệu ngược hợp lệ. Cooldown chỉ dùng sau lệnh thua.
+    Một số key cũ vẫn được giữ trong DEFAULTS để tránh lỗi tương thích với Telegram/state cũ,
+    nhưng không còn được dùng để tạo tín hiệu.
     """
     DEFAULTS = {
         'current_interval': '15m',
@@ -826,35 +813,20 @@ _STRATEGY_CONFIG = StrategyConfig()
 
 def get_strategy_config_text():
     c = _STRATEGY_CONFIG.get_all()
-    cur = _normalize_interval(c.get('current_interval', '1m'))
-    tp = float(c.get('strategy_tp_roi', 28.0) or 0.0)
-    sl = float(c.get('strategy_sl_roi', 12.0) or 0.0)
-    use_qv = float(c.get('use_quote_volume', 1.0) or 0.0) >= 0.5
+    tp = float(c.get('strategy_tp_roi', 0.0) or 0.0)
+    sl = float(c.get('strategy_sl_roi', 0.0) or 0.0)
+    protect_on = float(c.get('profit_protect_enabled', 1.0) or 0.0) >= 0.5
     return (
-        "🎯 <b>CHIẾN LƯỢC BIẾN ĐỘNG + VOLUME/RANGE TỐI GIẢN</b>\n\n"
-        f"• Khung nến tín hiệu: {cur} ({_interval_seconds(cur):.0f}s)\n"
-        "• Chọn coin theo biến động giá 24h cao nhất.\n"
-        "• Chỉ lọc coin đang bị cooldown/đang active/blacklist và đòn bẩy yêu cầu.\n"
-        "• Không dùng doji, râu nến, taker, trend, EMA/RSI, chấm điểm mơ hồ.\n"
-        "• Đóng và đảo ngay khi tín hiệu ngược hợp lệ, nhưng chặn nến trước có biên độ quá nhỏ.\n\n"
-        "⚡ <b>TÍN HIỆU VÀO LỆNH</b>\n"
-        f"• Volume hiện tại ≥ volume nến đóng gần nhất × {float(c.get('volume_factor', 1.10)):.2f}.\n"
-        f"• Biên độ nến đóng gần nhất phải ≥ {float(c.get('min_prev_range_pct', 0.08)):.3f}% giá để tránh nến bẹt.\n"
-        f"• Biên độ nến hiện tại ≥ biên độ nến đóng gần nhất × {float(c.get('range_factor', 1.10)):.2f}.\n"
-        f"• Chặn đảo nhiều lần trong cùng một nến: {'BẬT' if float(c.get('block_same_candle_reverse', 1.0)) >= 0.5 else 'TẮT'}.\n"
-        f"• Loại volume: {'quoteVolume USDT' if use_qv else 'base volume coin'}.\n"
-        "• Nến hiện tại xanh → BUY. Nến hiện tại đỏ → SELL. Open = Close thì ép BUY.\n\n"
-        "🪙 <b>CHỌN COIN</b>\n"
-        f"• Sắp xếp theo |priceChangePercent 24h| từ cao xuống thấp.\n"
-        f"• Số coin biến động để quét: {int(c.get('scan_top_coin_limit', 80) or 80)}.\n"
-        f"• Số coin chấm tín hiệu: {int(c.get('max_signal_eval_coins', 50) or 50)}.\n"
-        f"• Đòn bẩy yêu cầu: {int(c.get('min_allowed_leverage', 50) or 50)}x.\n"
-        f"• Cooldown sau lệnh thua: {int(c.get('coin_cooldown_after_loss_sec', 180) or 180)}s.\n"
-        f"• Đảo chiều khi tín hiệu ngược: BẬT | giới hạn đảo: {int(c.get('max_reverse_count', 999) or 999)} lần.\n\n"
+        "🎯 <b>CHIẾN LƯỢC RANDOM</b>\n\n"
+        "• Tín hiệu vào lệnh: RANDOM BUY/SELL.\n"
+        "• Không còn dùng volume, biên độ nến, nến bẹt, doji, EMA/RSI, trend, taker hay chấm điểm.\n"
+        "• Bot động chỉ chọn một coin hợp lệ chưa bị bot khác giữ, sau đó mở hướng random.\n"
+        "• Khi đã có vị thế: KHÔNG đảo chiều theo tín hiệu random.\n"
+        "• Thoát lệnh chỉ bằng TP/SL, emergency SL hoặc bảo vệ lợi nhuận.\n\n"
         "🛡️ <b>TP/SL - QUẢN LÝ LỆNH</b>\n"
         f"• TP chiến lược: {tp:.1f}% ROI ({'TẮT' if tp <= 0 else 'BẬT'})\n"
         f"• SL chiến lược: {sl:.1f}% ROI ({'TẮT' if sl <= 0 else 'BẬT'})\n"
-        f"• Bảo vệ lợi nhuận: {'BẬT' if float(c.get('profit_protect_enabled', 1.0)) >= 0.5 else 'TẮT'} | bắt đầu {float(c.get('profit_protect_start_roi', 14.0)):.1f}% | tụt {float(c.get('profit_protect_pullback_roi', 6.0)):.1f}% thì đóng\n"
+        f"• Bảo vệ lợi nhuận: {'BẬT' if protect_on else 'TẮT'} | bắt đầu {float(c.get('profit_protect_start_roi', 50.0)):.1f}% | tụt {float(c.get('profit_protect_pullback_roi', 30.0)):.1f}% thì đóng\n"
         "• Đồng bộ vị thế thật Binance: BẬT trước khi xét TP/SL.\n"
     )
 
@@ -1021,47 +993,14 @@ def _range_pct_of(c):
         return 0.0
 
 
-def _volatility_volume_range_signal(current_candle, prev_closed_candle=None, mode='entry'):
-    """Tín hiệu tối giản: current volume + current range vượt nến đóng gần nhất, đi theo màu nến hiện tại."""
+def _volatility_volume_range_signal(current_candle=None, prev_closed_candle=None, mode='entry'):
+    """Tín hiệu random BUY/SELL, không kiểm tra bất kỳ điều kiện nến/volume nào."""
     try:
-        if not current_candle or not prev_closed_candle:
-            return None, 0.0, 'missing_current_or_previous_candle', False
-        cfg = _STRATEGY_CONFIG.get_all()
-        vol_factor = max(0.0, float(cfg.get('volume_factor', 1.10) or 0.0))
-        range_factor = max(0.0, float(cfg.get('range_factor', 1.10) or 0.0))
-        min_prev_range_pct = max(0.0, float(cfg.get('min_prev_range_pct', 0.08) or 0.0))
-        curr_vol = float(_selected_volume_of(current_candle) or 0.0)
-        prev_vol = float(_selected_volume_of(prev_closed_candle) or 0.0)
-        curr_range = float(_range_pct_of(current_candle) or 0.0)
-        prev_range = float(_range_pct_of(prev_closed_candle) or 0.0)
-
-        if min_prev_range_pct > 0 and prev_range < min_prev_range_pct:
-            return None, 0.0, (
-                f"SIDEWAY prev_flat_range | prev_range={prev_range:.3f}% < min={min_prev_range_pct:.3f}% | "
-                f"curr_range={curr_range:.3f}%"
-            ), False
-
-        vol_need = prev_vol * vol_factor
-        range_need = prev_range * range_factor
-        vol_ok = curr_vol >= vol_need if prev_vol > 0 else curr_vol > 0
-        range_ok = curr_range >= range_need if prev_range > 0 else curr_range > 0
-        o = _candle_open(current_candle)
-        c = _candle_close(current_candle)
-        signal = 'BUY' if c >= o else 'SELL'
-
-        vol_ratio = curr_vol / prev_vol if prev_vol > 0 else (999.0 if curr_vol > 0 else 0.0)
-        range_ratio = curr_range / prev_range if prev_range > 0 else (999.0 if curr_range > 0 else 0.0)
-        strength = max(0.0, min(vol_ratio / max(vol_factor, 1e-9), range_ratio / max(range_factor, 1e-9)) * 100.0)
-        reason = (
-            f"{signal} | vol={curr_vol:.0f}/{prev_vol:.0f} ratio={vol_ratio:.2f} need={vol_factor:.2f} | "
-            f"range={curr_range:.3f}%/{prev_range:.3f}% ratio={range_ratio:.2f} need={range_factor:.2f}"
-        )
-        if vol_ok and range_ok:
-            return signal, strength, reason, False
-        return None, strength, 'SIDEWAY ' + reason, False
+        signal = random.choice(('BUY', 'SELL'))
+        reason = f"RANDOM_SIGNAL {signal} | no signal filters"
+        return signal, 100.0, reason, False
     except Exception as e:
-        return None, 0.0, f'signal_error:{e}', False
-
+        return None, 0.0, f'random_signal_error:{e}', False
 
 def _force_pct_from_candle(candle):
     # Giữ lại tên cũ để các phần thống kê không lỗi, không dùng cho tín hiệu.
@@ -1132,43 +1071,43 @@ def _fetch_rest_1m15m_signal_data(symbol):
 
 
 
-def compute_signal_from_candles(prev_candle, curr_candle, prev15m_candle=None, recent_1m_history=None):
+def compute_signal_from_candles(prev_candle=None, curr_candle=None, prev15m_candle=None, recent_1m_history=None):
     try:
-        signal, score, reason, _ = _closed_force_current_confirm_signal(curr_candle, prev_candle, mode='entry')
-        return signal
+        return random.choice(('BUY', 'SELL'))
     except Exception as e:
-        logger.error(f"Lỗi tính tín hiệu Current Force Percent: {e}")
+        logger.error(f"Lỗi tính tín hiệu random: {e}")
         return None
 
 def get_candle_signal_1h(symbol):
-    """Tên cũ để tương thích: thực tế dùng chiến lược Real Force Candle."""
+    """Tên cũ để tương thích: thực tế trả tín hiệu random."""
     try:
         details = get_candle_signal_details(symbol)
         return details.get('signal') if details else None
     except Exception as e:
-        logger.error(f"Lỗi phân tích tín hiệu Real Force Candle {symbol}: {e}")
+        logger.error(f"Lỗi phân tích tín hiệu random {symbol}: {e}")
         return None
 
 def get_candle_signal_details(symbol):
-    """Lấy tín hiệu tối giản: volume + biên độ hiện tại vượt nến đóng gần nhất."""
+    """Lấy tín hiệu random BUY/SELL, không cần dữ liệu nến."""
     try:
-        curr, prev1, market, history = _fetch_rest_1m15m_signal_data(symbol)
-        if not curr or not prev1:
-            return {'symbol': symbol, 'signal': None, 'score': 0.0, 'reason': 'REST không có đủ current/closed kline', 'is_spike': False, 'source': 'REST'}
-        signal, score, reason, is_spike = _closed_force_current_confirm_signal(curr, prev1, mode='entry')
+        signal = random.choice(('BUY', 'SELL'))
         return {
-            'symbol': symbol, 'signal': signal, 'score': float(score or 0.0),
-            'reason': reason, 'is_spike': bool(is_spike), 'source': 'REST',
-            'current_volume': _selected_volume_of(curr),
-            'previous_volume': _selected_volume_of(prev1),
-            'current_range_pct': _range_pct_of(curr),
-            'previous_range_pct': _range_pct_of(prev1),
-            'num_trades': _num_trades_of(curr),
+            'symbol': str(symbol).upper() if symbol else symbol,
+            'signal': signal,
+            'score': 100.0,
+            'reason': f'RANDOM_SIGNAL {signal} | no signal filters',
+            'is_spike': False,
+            'source': 'RANDOM',
+            'current_volume': 0.0,
+            'previous_volume': 0.0,
+            'current_range_pct': 0.0,
+            'previous_range_pct': 0.0,
+            'num_trades': 0,
         }
     except Exception as e:
-        logger.error(f"Lỗi lấy chi tiết tín hiệu Volume/Range {symbol}: {e}")
+        logger.error(f"Lỗi lấy chi tiết tín hiệu random {symbol}: {e}")
         logger.error(traceback.format_exc())
-        return {'symbol': symbol, 'signal': None, 'score': 0.0, 'reason': f'error: {e}', 'is_spike': False, 'source': 'REST'}
+        return {'symbol': symbol, 'signal': None, 'score': 0.0, 'reason': f'error: {e}', 'is_spike': False, 'source': 'RANDOM'}
 
 def get_positions(symbol=None, api_key=None, api_secret=None):
     try:
@@ -1512,6 +1451,11 @@ class SmartCoinFinder:
             return False, f'filter_error:{e}', 0.0, 0.0, 0
 
     def find_best_coin_with_balance(self, excluded_coins=None):
+        """Chọn random một coin hợp lệ, không chấm tín hiệu.
+
+        Chỉ bỏ qua coin blacklist/đang active/cooldown và coin không đạt đòn bẩy yêu cầu.
+        Hướng BUY/SELL sẽ random ở BaseBot khi mở vị thế.
+        """
         try:
             now = time.time()
             if now - self.last_scan_time < self.scan_cooldown:
@@ -1520,66 +1464,27 @@ class SmartCoinFinder:
 
             coins = get_coins_with_info()
             if not coins:
-                logger.warning("⚠️ Cache coin trống, không thể tìm coin.")
+                logger.warning("⚠️ Cache coin trống, không thể tìm coin random.")
                 return None
 
-            cfg = _STRATEGY_CONFIG.get_all()
-            limit = max(5, int(float(cfg.get('scan_top_coin_limit', 80) or 80)))
-            eval_limit = max(1, int(float(cfg.get('max_signal_eval_coins', 50) or 50)))
             lev_map = self._get_leverage_bracket_map()
-
-            # Sắp xếp đúng yêu cầu: coin biến động giá 24h cao nhất trước.
-            coins = sorted(coins, key=lambda c: abs(float(c.get('price_change_percent', 0.0) or 0.0)), reverse=True)[:limit]
-
             candidates = []
             for coin in coins:
                 ok, reason, base_score, spread, max_lev = self._coin_passes_filters(coin, {}, lev_map, excluded_coins or set())
                 if not ok:
                     continue
-                c = coin.copy()
-                c['_base_score'] = base_score
-                c['_spread_pct'] = 0.0
-                c['_max_leverage'] = max_lev
-                candidates.append(c)
+                candidates.append(coin.copy())
 
             if not candidates:
                 return None
 
-            candidates.sort(key=lambda c: float(c.get('_base_score', 0.0)), reverse=True)
-            candidates = candidates[:eval_limit]
-
-            best = None
-            for coin in candidates:
-                symbol = coin['symbol']
-                details = get_candle_signal_details(symbol)
-                signal = details.get('signal') if details else None
-                if not signal:
-                    continue
-                sig_score = float(details.get('score', 0.0) or 0.0)
-                base = float(coin.get('_base_score', 0.0) or 0.0)
-                final_score = base * 10.0 + sig_score
-                item = (final_score, symbol, signal, sig_score, base, coin, details)
-                if best is None or item[0] > best[0]:
-                    best = item
-
-            if best:
-                final_score, symbol, signal, sig_score, base, coin, details = best
-                logger.info(
-                    f"✅ Chọn coin biến động {symbol} {signal} | final={final_score:.1f} biến động24h={base:.2f}% "
-                    f"lev={int(coin.get('_max_leverage', 0) or 0)}x | {details.get('reason', '')[:220]}"
-                )
-                return symbol
-
-            if now - self._last_best_log > 60:
-                top = candidates[0]
-                logger.info(
-                    f"ℹ️ Chưa có tín hiệu. Top biến động: {top['symbol']} | biến động24h={float(top.get('_base_score', 0.0)):.2f}%"
-                )
-                self._last_best_log = now
-            return None
+            coin = random.choice(candidates)
+            symbol = str(coin.get('symbol', '')).upper()
+            logger.info(f"✅ Chọn coin RANDOM {symbol} | không chấm tín hiệu")
+            return symbol
 
         except Exception as e:
-            logger.error(f"❌ Lỗi tìm coin biến động: {str(e)}")
+            logger.error(f"❌ Lỗi tìm coin random: {str(e)}")
             logger.error(traceback.format_exc())
             return None
 
@@ -1940,7 +1845,7 @@ class BaseBot:
         strategy_sl = float(_STRATEGY_CONFIG.get('strategy_sl_roi', 0.0) or 0.0)
         tp_sl_info = f" | TP chiến lược: {strategy_tp}%" if strategy_tp > 0 else (f" | TP bot: {self.tp}%" if self.tp else " | TP: Tắt")
         tp_sl_info += f" | SL chiến lược: {strategy_sl}%" if strategy_sl > 0 else (f" | SL bot: {self.sl}%" if self.sl else " | SL: Tắt")
-        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: Volume/Range + lọc nến trước bẹt + đảo khi ngược{tp_sl_info}")
+        self.log(f"🟢 Bot {strategy_name} đã khởi động | 1 coin | Đòn bẩy: {lev}x | Vốn: {percent}% | Tín hiệu: RANDOM BUY/SELL | Thoát: TP/SL + bảo vệ lợi nhuận{tp_sl_info}")
 
     def _run(self):
         last_coin_search_log = 0
@@ -1982,12 +1887,12 @@ class BaseBot:
                             self.bot_coordinator.bot_has_coin(self.bot_id)
                             self._add_symbol(found_coin)
                             self.bot_coordinator.finish_coin_search(self.bot_id, found_coin, has_coin_now=True)
-                            self.log(f"✅ Đã tìm thấy coin: {found_coin}, đang chờ vào lệnh...")
+                            self.log(f"✅ Đã tìm thấy coin random: {found_coin}, chuẩn bị vào lệnh random...")
                             last_coin_search_log = 0
                         else:
                             self.bot_coordinator.finish_coin_search(self.bot_id)
                             if current_time - last_no_coin_found_log > 60:
-                                self.log(f"❌ Không tìm thấy coin phù hợp")
+                                self.log(f"❌ Không tìm thấy coin hợp lệ để random")
                                 last_no_coin_found_log = current_time
                     else:
                         queue_pos = self.bot_coordinator.get_queue_position(self.bot_id)
@@ -2034,17 +1939,14 @@ class BaseBot:
                 return False
 
             if symbol_info['position_open']:
-                # Đồng bộ vị thế thật với Binance trước khi xét TP/SL/đảo chiều.
+                # Đồng bộ vị thế thật với Binance trước khi xét TP/SL và bảo vệ lợi nhuận.
                 # Việc này giúp bot biết nhanh khi người dùng đóng lệnh trực tiếp trên Binance,
-                # tránh local vẫn tưởng còn vị thế rồi tính TP/SL hoặc mở đảo sai.
+                # tránh local vẫn tưởng còn vị thế rồi tính TP/SL sai.
                 if not self._sync_symbol_position(symbol):
                     return False
 
                 self._check_symbol_tp_sl(symbol)
-                # Nếu TP/SL hoặc profit protect vừa đóng lệnh thì không xét đảo chiều tiếp trong cùng vòng.
-                if not symbol_info.get('position_open'):
-                    return False
-                self._check_realtime_exit(symbol)
+                # Chiến lược random không đảo chiều theo tín hiệu; lệnh chỉ thoát bằng TP/SL hoặc bảo vệ lợi nhuận.
                 return False
             else:
                 if self._pending_reverse and self._reverse_symbol == symbol:
@@ -2097,8 +1999,7 @@ class BaseBot:
             'added_time': time.time()
         }
         self.ws_manager.add_symbol(symbol, lambda p, s=symbol: self._handle_price_update(s, p))
-        if self.kline_manager:
-            self.kline_manager.add_symbol(symbol, self._on_kline_update)
+        # Random signal không cần kline websocket; chỉ giữ price websocket để quản lý TP/SL.
         self.coin_manager.register_coin(symbol)
         self.log(f"➕ Đã thêm {symbol} vào theo dõi")
 
@@ -2124,87 +2025,56 @@ class BaseBot:
         self.last_signal_time[symbol] = time.time()
         self.symbol_data[symbol]['realtime_signal'] = signal
 
-    def _compute_signal_from_candle(self, current_candle, prev_candle, prev15_candle=None, mode='entry', return_details=False, recent_1m_history=None):
-        """Entry: nến đóng gần nhất đủ lực + nến hiện tại xác nhận. Exit: lực ngược realtime của nến hiện tại."""
+    def _compute_signal_from_candle(self, current_candle=None, prev_candle=None, prev15_candle=None, mode='entry', return_details=False, recent_1m_history=None):
+        """Tín hiệu random BUY/SELL, không dùng dữ liệu nến."""
         try:
-            symbol = current_candle.get('symbol') if isinstance(current_candle, dict) else None
-            if symbol and symbol in self.symbol_data:
-                last_price = float(self.symbol_data[symbol].get('last_price', 0) or 0)
-                if last_price > 0:
-                    current_candle['close'] = last_price
-                    current_candle['high'] = max(float(current_candle.get('high', last_price)), last_price)
-                    current_candle['low'] = min(float(current_candle.get('low', last_price)), last_price)
-
-            signal, score, reason, is_spike = _closed_force_current_confirm_signal(current_candle, prev_candle or {}, mode=mode)
-            progress = _safe_progress(current_candle, _interval_seconds(_STRATEGY_CONFIG.get('signal_interval', '15m')))
+            signal = random.choice(('BUY', 'SELL'))
+            candle_time = 0
+            if isinstance(current_candle, dict):
+                candle_time = int(current_candle.get('time', 0) or 0)
             details = {
-                'signal': signal, 'score': score, 'reason': reason, 'is_spike': is_spike, 'progress': progress,
-                'current_candle_time': int(current_candle.get('time', 0) or 0) if isinstance(current_candle, dict) else 0,
+                'signal': signal,
+                'score': 100.0,
+                'reason': f'RANDOM_SIGNAL {signal} | no signal filters',
+                'is_spike': False,
+                'progress': 1.0,
+                'current_candle_time': candle_time,
+                'source': 'RANDOM',
             }
             return details if return_details else signal
         except Exception as e:
-            logger.error(f"Lỗi compute signal Current Force Percent: {e}")
-            details = {'signal': None, 'score': 0, 'reason': 'error', 'is_spike': False}
+            logger.error(f"Lỗi compute signal random: {e}")
+            details = {'signal': None, 'score': 0, 'reason': 'error', 'is_spike': False, 'source': 'RANDOM'}
             return details if return_details else None
+
     def _get_fresh_realtime_signal(self, symbol, mode='entry', return_details=False):
-        """Tính tín hiệu mới ngay tại thời điểm kiểm tra bằng khung nến đã chọn."""
+        """Trả tín hiệu random ngay lập tức, không gọi REST/WS để kiểm tra điều kiện tín hiệu."""
         try:
             symbol = symbol.upper()
-            candle = None
-            prev = None
-
-            if self.kline_manager:
-                candle = self.kline_manager.get_candle(symbol)
-                prev = self.kline_manager.get_prev_candle(symbol)
-
-            now = time.time()
-            ws_stale = True
-            if candle and not candle.get('is_final', False):
-                update_ts = float(candle.get('update_ts', 0) or 0)
-                ws_stale = update_ts <= 0 or (now - update_ts) > 3
-
-            force_rest = float(_STRATEGY_CONFIG.get('force_rest_signal_enabled', 1.0) or 0.0) >= 0.5
-            data_source = 'WS'
-            if force_rest or (not candle) or ws_stale:
-                rest_candle, rest_prev, _rest_market, _ = self._get_rest_current_and_prev_candle(symbol)
-                if rest_candle:
-                    candle, prev = rest_candle, rest_prev or {}
-                    data_source = 'REST'
-                    if self.kline_manager:
-                        self.kline_manager.candle_data[symbol] = rest_candle
-                        if rest_prev:
-                            self.kline_manager.prev_candle_data[symbol] = rest_prev
-                else:
-                    data_source = 'WS_STALE_NO_REST' if candle else 'NO_DATA'
-
-            market_candle_for_score = None
-
-            if not candle:
-                details = {'signal': None, 'score': 0, 'reason': 'missing_current_candle', 'is_spike': False}
-                self.realtime_signal[symbol] = None
-                self.last_signal_time[symbol] = time.time()
-                if symbol in self.symbol_data:
-                    self.symbol_data[symbol]['realtime_signal'] = None
-                return details if return_details else None
-
-            details = self._compute_signal_from_candle(candle, prev or {}, market_candle_for_score, mode=mode, return_details=True, recent_1m_history=[])
-            signal = details.get('signal')
-            details['source'] = data_source
-            details['quote_volume'] = _quote_volume_of(candle)
-            details['taker_buy_quote'] = _taker_buy_quote_of(candle)
-            details['taker_sell_quote'] = max(0.0, _quote_volume_of(candle) - _taker_buy_quote_of(candle))
-            details['num_trades'] = _num_trades_of(candle)
-
+            signal = random.choice(('BUY', 'SELL'))
+            details = {
+                'symbol': symbol,
+                'signal': signal,
+                'score': 100.0,
+                'reason': f'RANDOM_SIGNAL {signal} | no signal filters',
+                'is_spike': False,
+                'progress': 1.0,
+                'current_candle_time': 0,
+                'source': 'RANDOM',
+                'quote_volume': 0.0,
+                'taker_buy_quote': 0.0,
+                'taker_sell_quote': 0.0,
+                'num_trades': 0,
+            }
             self.realtime_signal[symbol] = signal
             self.last_signal_time[symbol] = time.time()
             if symbol in self.symbol_data:
                 self.symbol_data[symbol]['realtime_signal'] = signal
                 self.symbol_data[symbol]['last_signal_details'] = details
-
             return details if return_details else signal
         except Exception as e:
-            logger.error(f"Lỗi lấy tín hiệu realtime Real Force Candle {symbol}: {e}")
-            details = {'signal': None, 'score': 0, 'reason': 'error', 'is_spike': False}
+            logger.error(f"Lỗi lấy tín hiệu random {symbol}: {e}")
+            details = {'signal': None, 'score': 0, 'reason': 'error', 'is_spike': False, 'source': 'RANDOM'}
             return details if return_details else None
 
     def _get_rest_current_and_prev_candle(self, symbol):
@@ -2231,40 +2101,12 @@ class BaseBot:
             logger.error(f"Lỗi REST fallback lấy nến Real Force Candle {symbol}: {e}")
             return None, None, None, []
     def _check_realtime_exit(self, symbol):
-        """Đóng và đảo chiều ngay khi tín hiệu realtime đi ngược vị thế hiện tại.
+        """Đã tắt đảo chiều theo tín hiệu.
 
-        Đây vẫn là logic tối giản: dùng chính tín hiệu volume + biên độ hiện tại so với
-        nến đã đóng gần nhất. Nếu bot đang BUY mà tín hiệu mới là SELL thì SELL đó
-        được coi là tín hiệu hợp lệ để đóng BUY và mở SELL ngay. Ngược lại tương tự.
+        Với chiến lược random, bot không dùng tín hiệu ngược để đóng/đảo lệnh nữa.
+        Lệnh đang mở chỉ được quản lý bởi TP/SL, emergency stop và bảo vệ lợi nhuận.
         """
-        try:
-            if symbol not in self.symbol_data:
-                return
-            data = self.symbol_data[symbol]
-            if not data.get('position_open'):
-                return
-
-            current_side = data.get('side')
-            details = self._get_fresh_realtime_signal(symbol, mode='entry', return_details=True)
-            signal = details.get('signal') if isinstance(details, dict) else None
-            if not signal or signal == current_side:
-                return
-
-            reason = details.get('reason', '') if isinstance(details, dict) else ''
-            score = float(details.get('score', 0.0) or 0.0) if isinstance(details, dict) else 0.0
-            candle_time = int(details.get('current_candle_time', 0) or 0) if isinstance(details, dict) else 0
-            block_same = float(_STRATEGY_CONFIG.get('block_same_candle_reverse', 1.0) or 0.0) >= 0.5
-            if block_same and candle_time and int(data.get('last_reverse_candle_time', 0) or 0) == candle_time:
-                return
-            if block_same and candle_time:
-                data['last_reverse_candle_time'] = candle_time
-            self.log(
-                f"🔁 {symbol} - Tín hiệu ngược hợp lệ: đang {current_side}, mới {signal} | "
-                f"strength={score:.1f} | đóng và đảo ngay | {reason[:180]}"
-            )
-            self._close_symbol_position(symbol, reason=f"Candle opposite {signal}", reverse_side=signal)
-        except Exception as e:
-            logger.error(f"Lỗi kiểm tra đảo chiều realtime {symbol}: {e}")
+        return
 
     def _calc_roi_pnl_for_symbol(self, symbol, pos=None, price=None):
         """Tính ROI/PnL hiện tại theo vị thế thật Binance nếu có.
@@ -2505,14 +2347,8 @@ class BaseBot:
                     self.log(f"⚠️ {symbol} local đang có vị thế, không mở thêm")
                     return False
 
-                if not skip_signal_check:
-                    current_signal = self._get_fresh_realtime_signal(symbol)
-                    if current_signal is None or current_signal != side:
-                        # Không dừng/bỏ coin chỉ vì tín hiệu vừa mất trong khoảnh khắc.
-                        # Khi chưa có vị thế: chỉ bỏ qua lần mở lệnh này và tiếp tục theo dõi coin.
-                        # Khi đang đảo chiều: reverse đã dùng skip_signal_check=True nên không đi vào nhánh này.
-                        self.log(f"⚠️ {symbol} tín hiệu realtime chưa phù hợp để mở ({current_signal} vs {side}), tiếp tục theo dõi coin")
-                        return False
+                # Chiến lược random: không kiểm tra lại tín hiệu trước khi mở lệnh.
+                # Side đã được chọn ngẫu nhiên ở bước gọi hàm, nên re-check sẽ làm lệch kết quả.
 
                 if not set_leverage(symbol, self.lev, self.api_key, self.api_secret):
                     self.log(f"❌ {symbol} - Không thể cài đặt đòn bẩy {self.lev}x")
@@ -2898,7 +2734,7 @@ class BotManager:
 
         if api_key and api_secret:
             self._verify_api_connection()
-            self.log("🟢 HỆ THỐNG BOT REAL FORCE CANDLE - CLEAN")
+            self.log("🟢 HỆ THỐNG BOT RANDOM SIGNAL - CLEAN")
             self._initialize_cache()
             self._cache_thread = threading.Thread(target=self._cache_updater, daemon=True, name='cache_updater')
             self._cache_thread.start()
@@ -2989,7 +2825,7 @@ class BotManager:
                     'sl': bot.sl,
                 })
 
-            summary = "📊 **THỐNG KÊ CHI TIẾT - BOT REAL FORCE CANDLE**\n\n"
+            summary = "📊 **THỐNG KÊ CHI TIẾT - BOT RANDOM SIGNAL**\n\n"
 
             cache_stats = _COINS_CACHE.get_stats()
             coins_in_cache = cache_stats['count']
@@ -3100,15 +2936,15 @@ class BotManager:
 
     def send_main_menu(self, chat_id):
         welcome = (
-            "🤖 <b>BOT GIAO DỊCH FUTURES - REAL FORCE CANDLE</b>\n\n"
+            "🤖 <b>BOT GIAO DỊCH FUTURES - RANDOM SIGNAL</b>\n\n"
             "🎯 <b>CƠ CHẾ HOẠT ĐỘNG:</b>\n"
-            "• Chọn khung nến hiện tại và khung nến so sánh trong mục 🎯 Chiến lược.\n"
-            "• Bot chỉ vào khi nến đã đóng gần nhất cực trị và đủ tốc độ/body; nến hiện tại chỉ xác nhận xanh ở đáy hoặc đỏ ở đỉnh.\n"
-            "• Nến đỏ cực mạnh → BUY bắt đáy; nến xanh cực mạnh → SELL bán đỉnh.\n"
-            "• Khi đang có vị thế, nếu xuất hiện tín hiệu cực đoan ngược vị thế thì đóng và đảo ngay.\n"
-            "• TP/SL trong mục Chiến lược có thể chỉnh sau khi bot đã vào lệnh.\n"
-            "• Khi có vị thế, bot đồng bộ vị thế thật Binance trước TP/SL/đảo chiều.\n\n"
-            "📌 <b>LƯU Ý:</b> Không có bot auto win 100%; hãy chạy vốn nhỏ để test trước."
+            "• Tín hiệu vào lệnh là random BUY/SELL.\n"
+            "• Không dùng volume, biên độ nến, nến bẹt, doji, EMA/RSI, trend, taker hay chấm điểm.\n"
+            "• Bot động chọn một coin hợp lệ rồi mở vị thế random.\n"
+            "• Khi đang có vị thế, bot KHÔNG đảo chiều theo tín hiệu.\n"
+            "• Lệnh chỉ thoát bằng TP/SL hoặc bảo vệ lợi nhuận tụt từ đỉnh.\n"
+            "• TP/SL trong mục Chiến lược có thể chỉnh sau khi bot đã vào lệnh.\n\n"
+            "📌 <b>LƯU Ý:</b> Random rất rủi ro; hãy chạy vốn nhỏ để test trước."
         )
         send_telegram(welcome, chat_id=chat_id, reply_markup=create_main_menu(),
                      bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -3152,15 +2988,15 @@ class BotManager:
         if created_count > 0:
             tp_info = f"🎯 TP: {tp}%" if tp else "🎯 TP: Tắt"
             sl_info = f"🛡️ SL: {sl}%" if sl else "🛡️ SL: Tắt"
-            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT REAL FORCE CANDLE</b>\n\n"
+            success_msg = (f"✅ <b>ĐÃ TẠO {created_count} BOT RANDOM</b>\n\n"
                            f"🎯 Chiến lược: {strategy_type}\n💰 Đòn bẩy: {lev}x\n"
                            f"📈 % Số dư: {percent}%\n{tp_info}\n{sl_info}\n"
                            f"🔧 Chế độ: {bot_mode}\n🔢 Số bot: {created_count}\n")
             if bot_mode == 'static' and symbol:
                 success_msg += f"🔗 Coin ban đầu: {symbol}\n"
             else:
-                success_msg += f"🔗 Coin: Tự động tìm coin có tín hiệu Real Force Candle (USDT/USDC)\n"
-            success_msg += "🎯 Tham số chiến lược dùng theo cấu hình Telegram hiện tại.\n"
+                success_msg += f"🔗 Coin: Tự động chọn random một coin hợp lệ (USDT/USDC)\n"
+            success_msg += "🎯 Tín hiệu random; chỉ dùng cấu hình TP/SL và bảo vệ lợi nhuận.\n"
             self.log(success_msg)
             return True
         else:
@@ -3278,21 +3114,11 @@ class BotManager:
         current_step = user_state.get('step')
 
         strategy_key_map = {
-            '✏️ Khung nến tín hiệu': ('current_interval', 'Khung nến lấy nến hiện tại và nến đóng gần nhất. Ví dụ: 1m, 3m, 5m, 15m.'),
-            '✏️ Số coin biến động để quét': ('scan_top_coin_limit', 'Lấy top N coin có |priceChangePercent 24h| cao nhất để quét.'),
-            '✏️ Số coin chấm tín hiệu': ('max_signal_eval_coins', 'Trong top biến động, chấm tín hiệu tối đa bao nhiêu coin để giảm request.'),
-            '✏️ Đòn bẩy yêu cầu': ('min_allowed_leverage', 'Chỉ đánh coin có bracket hỗ trợ ít nhất mức đòn bẩy này.'),
-            '✏️ Hệ số volume': ('volume_factor', 'Volume hiện tại phải >= volume nến đóng gần nhất nhân hệ số này. Ví dụ 1.1, 1.2, 1.5.'),
-            '✏️ Hệ số biên độ nến': ('range_factor', 'Biên độ hiện tại phải >= biên độ nến đóng gần nhất nhân hệ số này. Ví dụ 1.1, 1.2, 1.5.'),
-            '✏️ Biên độ nến trước tối thiểu': ('min_prev_range_pct', 'Nếu nến đã đóng gần nhất có biên độ nhỏ hơn mức này thì bỏ qua tín hiệu để tránh nến bẹt. Ví dụ 0.05, 0.08, 0.12.'),
-            '✏️ Chặn đảo cùng nến': ('block_same_candle_reverse', '1 = không cho đảo nhiều lần trong cùng một cây nến hiện tại, 0 = tắt.'),
-            '✏️ Dùng volume USDT': ('use_quote_volume', '1 = dùng quoteVolume USDT, 0 = dùng base volume coin.'),
             '✏️ TP chiến lược': ('strategy_tp_roi', 'TP ROI dùng realtime, có thể chỉnh sau khi đã vào lệnh. 0 = tắt.'),
             '✏️ SL chiến lược': ('strategy_sl_roi', 'SL ROI dùng realtime, có thể chỉnh sau khi đã vào lệnh. 0 = tắt.'),
             '✏️ Bảo vệ lợi nhuận': ('profit_protect_enabled', '1 = bật bảo vệ lợi nhuận tụt từ đỉnh, 0 = tắt.'),
             '✏️ ROI bắt đầu bảo vệ': ('profit_protect_start_roi', 'ROI từng đạt từ mức này trở lên thì bắt đầu bảo vệ lợi nhuận.'),
             '✏️ ROI tụt từ đỉnh để đóng': ('profit_protect_pullback_roi', 'Khi ROI tụt từ đỉnh xuống mức này thì đóng.'),
-            '✏️ Cooldown sau thua': ('coin_cooldown_after_loss_sec', 'Sau khi coin thua, tạm nghỉ coin đó bao nhiêu giây.'),
         }
 
         if text == "📊 Danh sách Bot":
@@ -3595,16 +3421,16 @@ class BotManager:
 
             if success:
                 success_msg = (
-                    f"✅ <b>ĐÃ TẠO BOT MARKET REGIME + SPEED THÀNH CÔNG</b>\n\n"
-                    f"🤖 Chiến lược: biến động 24h + volume/range realtime tối giản\n"
+                    f"✅ <b>ĐÃ TẠO BOT RANDOM THÀNH CÔNG</b>\n\n"
+                    f"🤖 Chiến lược: random BUY/SELL, không dùng điều kiện tín hiệu\n"
                     f"🔧 Chế độ: {bot_mode}\n"
                     f"🔢 Số bot: {bot_count}\n"
                     f"💰 Đòn bẩy: {leverage}x\n"
                     f"📊 % Số dư: {percent}%\n"
                     f"🎯 TP: {tp if tp else 'Tắt'}\n"
                     f"🛡️ SL: {sl if sl else 'Tắt'}\n"
-                    f"🔄 Thoát: tín hiệu ngược đủ chuẩn thì đảo ngay; có hút lực từ đỉnh để bảo vệ lời\n"
-                    f"⚖️ Cân bằng/lọc coin: Đã bỏ\n\n"
+                    f"🔄 Thoát: chỉ TP/SL hoặc bảo vệ lợi nhuận tụt từ đỉnh\n"
+                    f"⚖️ Điều kiện tín hiệu: Đã bỏ hết\n\n"
                     f"{get_strategy_config_text()}"
                 )
                 if bot_mode == 'static' and symbol:
